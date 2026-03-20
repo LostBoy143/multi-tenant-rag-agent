@@ -1,0 +1,13 @@
+fastapi[standard]
+uvicorn[standard]
+sqlalchemy[asyncio]
+asyncpg
+alembic
+qdrant-client
+google-genai
+pymupdf
+python-docx
+bcrypt
+slowapi
+python-multipart
+pydantic-settings
