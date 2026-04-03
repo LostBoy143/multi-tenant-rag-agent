@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.config import settings
 from app.database import Base
-from app.models import APIKey, Document, Tenant  # noqa: F401 — register models
+from app.models import APIKey, Document, Organization, User, KnowledgeBase  # noqa: F401 — register models
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

@@ -8,12 +8,12 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-def _collection_name(tenant_id: uuid.UUID) -> str:
-    return f"tenant_{tenant_id.hex}"
+def _collection_name(organization_id: uuid.UUID) -> str:
+    return f"org_{organization_id.hex}"
 
 
-async def create_tenant_collection(client: AsyncQdrantClient, tenant_id: uuid.UUID) -> None:
-    name = _collection_name(tenant_id)
+async def create_organization_collection(client: AsyncQdrantClient, organization_id: uuid.UUID) -> None:
+    name = _collection_name(organization_id)
     exists = await client.collection_exists(name)
     if exists:
         logger.info("Collection %s already exists, skipping creation.", name)
@@ -28,8 +28,8 @@ async def create_tenant_collection(client: AsyncQdrantClient, tenant_id: uuid.UU
     logger.info("Created Qdrant collection: %s", name)
 
 
-async def delete_tenant_collection(client: AsyncQdrantClient, tenant_id: uuid.UUID) -> None:
-    name = _collection_name(tenant_id)
+async def delete_organization_collection(client: AsyncQdrantClient, organization_id: uuid.UUID) -> None:
+    name = _collection_name(organization_id)
     exists = await client.collection_exists(name)
     if exists:
         await client.delete_collection(name)
@@ -38,19 +38,21 @@ async def delete_tenant_collection(client: AsyncQdrantClient, tenant_id: uuid.UU
 
 async def upsert_chunks(
     client: AsyncQdrantClient,
-    tenant_id: uuid.UUID,
+    organization_id: uuid.UUID,
     document_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
     chunks: list[str],
     embeddings: list[list[float]],
     filename: str,
 ) -> None:
-    name = _collection_name(tenant_id)
+    name = _collection_name(organization_id)
     points = [
         models.PointStruct(
             id=uuid.uuid4().hex,
             vector=emb,
             payload={
                 "document_id": str(document_id),
+                "knowledge_base_id": str(knowledge_base_id),
                 "chunk_index": idx,
                 "text": chunk,
                 "filename": filename,
@@ -68,15 +70,29 @@ async def upsert_chunks(
 
 async def search_chunks(
     client: AsyncQdrantClient,
-    tenant_id: uuid.UUID,
+    organization_id: uuid.UUID,
     query_vector: list[float],
+    knowledge_base_ids: list[uuid.UUID] | None = None,
     top_k: int = 5,
     score_threshold: float | None = None,
 ) -> list[models.ScoredPoint]:
-    name = _collection_name(tenant_id)
+    name = _collection_name(organization_id)
+    
+    filter_obj = None
+    if knowledge_base_ids:
+        filter_obj = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="knowledge_base_id",
+                    match=models.MatchAny(any=[str(kb_id) for kb_id in knowledge_base_ids]),
+                )
+            ]
+        )
+        
     results = await client.query_points(
         collection_name=name,
         query=query_vector,
+        query_filter=filter_obj,
         limit=top_k,
         score_threshold=score_threshold or settings.rag_score_threshold,
     )
@@ -85,10 +101,10 @@ async def search_chunks(
 
 async def delete_document_chunks(
     client: AsyncQdrantClient,
-    tenant_id: uuid.UUID,
+    organization_id: uuid.UUID,
     document_id: uuid.UUID,
 ) -> None:
-    name = _collection_name(tenant_id)
+    name = _collection_name(organization_id)
     await client.delete(
         collection_name=name,
         points_selector=models.FilterSelector(

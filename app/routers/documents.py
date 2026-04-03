@@ -1,13 +1,14 @@
 import logging
 import uuid
 from typing import Annotated
-
-from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, status, Query, Request
+from app.core.limiter import limiter
 from sqlalchemy import select
 
 from app.config import settings
 from app.dependencies import CurrentTenantDep, DatabaseDep, QdrantDep
 from app.models.document import Document, DocumentStatus
+from app.models.knowledge_base import KnowledgeBase
 from app.schemas.document import DocumentResponse, UploadResponse
 from app.services.document_processor import ALLOWED_CONTENT_TYPES, extract_text
 from app.services.chunker import recursive_chunk
@@ -22,7 +23,8 @@ router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
 async def _process_document(
     document_id: uuid.UUID,
-    tenant_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
     file_bytes: bytes,
     content_type: str,
     filename: str,
@@ -46,7 +48,9 @@ async def _process_document(
             embeddings = embed_texts(chunks)
 
             qdrant = AsyncQdrantClient(host=qdrant_host, port=qdrant_port)
-            await upsert_chunks(qdrant, tenant_id, document_id, chunks, embeddings, filename)
+            await upsert_chunks(
+                qdrant, organization_id, document_id, knowledge_base_id, chunks, embeddings, filename
+            )
             await qdrant.close()
 
             result = await db.execute(select(Document).where(Document.id == document_id))
@@ -67,13 +71,26 @@ async def _process_document(
 
 
 @router.post("/upload", status_code=202)
+@limiter.limit("10/hour")
 async def upload_document(
+    request: Request,
     file: UploadFile,
-    tenant: CurrentTenantDep,
+    organization: CurrentTenantDep,
     db: DatabaseDep,
     qdrant: QdrantDep,
     background_tasks: BackgroundTasks,
+    kb_id: Annotated[uuid.UUID, Query(alias="kbId")]
 ) -> UploadResponse:
+    # 1. Verify Knowledge Base belongs to Organization
+    kb_result = await db.execute(
+        select(KnowledgeBase).where(
+            KnowledgeBase.id == kb_id, 
+            KnowledgeBase.organization_id == organization.id
+        )
+    )
+    if not kb_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Knowledge base not found or access denied")
+
     content_type = file.content_type or ""
     if content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
@@ -92,7 +109,8 @@ async def upload_document(
     doc_id = uuid.uuid4()
     document = Document(
         id=doc_id,
-        tenant_id=tenant.id,
+        organization_id=organization.id,
+        knowledge_base_id=kb_id,
         filename=file.filename or "untitled",
         file_type=ALLOWED_CONTENT_TYPES[content_type],
         status=DocumentStatus.PROCESSING,
@@ -104,7 +122,8 @@ async def upload_document(
     background_tasks.add_task(
         _process_document,
         document_id=doc_id,
-        tenant_id=tenant.id,
+        organization_id=organization.id,
+        knowledge_base_id=kb_id,
         file_bytes=file_bytes,
         content_type=content_type,
         filename=file.filename or "untitled",
@@ -112,8 +131,8 @@ async def upload_document(
         qdrant_port=settings.qdrant_port,
     )
 
-    return UploadResponse(
-        document=DocumentResponse(
+    return {"success": True, "data": {
+        "document": DocumentResponse(
             id=document.id,
             filename=document.filename,
             file_type=document.file_type,
@@ -122,21 +141,24 @@ async def upload_document(
             error_message=document.error_message,
             created_at=document.created_at,
         ),
-    )
+    }}
 
 
 @router.get("")
+@limiter.limit("60/minute")
 async def list_documents(
-    tenant: CurrentTenantDep,
+    request: Request,
+    organization: CurrentTenantDep,
     db: DatabaseDep,
-) -> list[DocumentResponse]:
-    result = await db.execute(
-        select(Document)
-        .where(Document.tenant_id == tenant.id)
-        .order_by(Document.created_at.desc())
-    )
+    kb_id: Annotated[uuid.UUID | None, Query(alias="kbId")] = None
+):
+    query = select(Document).where(Document.organization_id == organization.id)
+    if kb_id:
+        query = query.where(Document.knowledge_base_id == kb_id)
+        
+    result = await db.execute(query.order_by(Document.created_at.desc()))
     docs = result.scalars().all()
-    return [
+    data = [
         DocumentResponse(
             id=d.id,
             filename=d.filename,
@@ -148,22 +170,23 @@ async def list_documents(
         )
         for d in docs
     ]
+    return {"success": True, "data": data}
 
 
 @router.delete("/{document_id}", status_code=204)
 async def delete_document(
     document_id: uuid.UUID,
-    tenant: CurrentTenantDep,
+    organization: CurrentTenantDep,
     db: DatabaseDep,
     qdrant: QdrantDep,
 ) -> None:
     result = await db.execute(
-        select(Document).where(Document.id == document_id, Document.tenant_id == tenant.id)
+        select(Document).where(Document.id == document_id, Document.organization_id == organization.id)
     )
     doc = result.scalar_one_or_none()
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
 
-    await delete_document_chunks(qdrant, tenant.id, document_id)
+    await delete_document_chunks(qdrant, organization.id, document_id)
     await db.delete(doc)
     await db.commit()

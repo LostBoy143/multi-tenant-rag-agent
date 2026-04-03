@@ -11,3 +11,16 @@ bcrypt
 slowapi
 python-multipart
 pydantic-settings
+passlib[argon2]
+python-jose[cryptography]
+pyotp
+qrcode[pil]
+redis[asyncio]
+fastapi-mail
+aiosmtplib
+pytest
+pytest-asyncio
+httpx
+pytest
+pytest-asyncio
+httpx

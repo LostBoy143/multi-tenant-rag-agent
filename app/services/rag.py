@@ -6,15 +6,19 @@ from anyio import to_thread
 from google import genai
 from google.genai.types import GenerateContentConfig
 from qdrant_client import AsyncQdrantClient
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.config import settings
+from app.database import async_session_factory
+from app.models.agent import Agent
 from app.schemas.chat import QueryResponse, SourceChunk
 from app.services.embedding import embed_query
 from app.services.vector_store import search_chunks
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_INSTRUCTION = """\
+DEFAULT_SYSTEM_INSTRUCTION = """\
 You are a helpful chatbot embedded on a company's website. You answer visitor \
 questions using the company's internal knowledge base provided below as context.
 
@@ -92,13 +96,36 @@ def _sync_generate(system: str, user_message: str) -> str:
 
 async def answer_query(
     qdrant: AsyncQdrantClient,
-    tenant_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    agent_id: uuid.UUID,
     question: str,
     top_k: int = 5,
 ) -> QueryResponse:
+    # 1. Fetch Agent and its linked Knowledge Bases
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(Agent)
+            .options(selectinload(Agent.knowledge_bases))
+            .where(Agent.id == agent_id, Agent.organization_id == organization_id)
+        )
+        agent = result.scalar_one_or_none()
+        
+        if not agent:
+            raise ValueError(f"Agent {agent_id} not found for organization {organization_id}")
+            
+        system_instruction = agent.system_prompt or DEFAULT_SYSTEM_INSTRUCTION
+        kb_ids = [kb.id for kb in agent.knowledge_bases]
+
+    # 2. Vector search (filtered by KB IDs)
     query_vector = await to_thread.run_sync(partial(embed_query, question))
 
-    results = await search_chunks(qdrant, tenant_id, query_vector, top_k=top_k)
+    results = await search_chunks(
+        qdrant, 
+        organization_id, 
+        query_vector, 
+        knowledge_base_ids=kb_ids if kb_ids else None, 
+        top_k=top_k
+    )
 
     if not results:
         answer_text = await to_thread.run_sync(
@@ -129,7 +156,7 @@ async def answer_query(
     user_message = f"{context_message}\n\nUSER QUESTION: {question}"
 
     answer_text = await to_thread.run_sync(
-        partial(_sync_generate, SYSTEM_INSTRUCTION, user_message)
+        partial(_sync_generate, system_instruction, user_message)
     )
 
     return QueryResponse(answer=answer_text, sources=sources)

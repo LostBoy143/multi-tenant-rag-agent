@@ -7,20 +7,22 @@ import sqlalchemy
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from slowapi import Limiter
+from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings
+from app.core.limiter import limiter
+from app.core.logging_config import setup_logging
 from app.database import engine
-from app.dependencies import get_qdrant
-from app.routers import chat, documents, tenants
+from app.dependencies import get_qdrant, get_redis_client
+from app.auth.router import router as auth_router
+from app.routers import admin, agents, api_keys, chat, conversations, documents, knowledge_base, public, widgets
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# Configure structured logging
+setup_logging()
 logger = logging.getLogger(__name__)
-
-limiter = Limiter(key_func=get_remote_address)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -38,12 +40,26 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="RAG SaaS API",
-    description="Multi-tenant RAG service with document upload, vector search, and Gemini-powered answers.",
-    version="0.1.0",
+    title="BolChat AI API",
+    description="Secure Multi-tenant RAG service.",
+    version="1.0.0",
     lifespan=lifespan,
+    docs_url="/api/docs" if settings.environment == "development" else None,
+    redoc_url="/api/redoc" if settings.environment == "development" else None,
 )
 
+# Custom Security Headers Middleware
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none';"
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
 app.state.limiter = limiter
 
 
@@ -58,35 +74,63 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> Respon
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=settings.cors_origins if settings.cors_origins else ["*"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
 
-app.include_router(tenants.router)
+app.include_router(auth_router)
+app.include_router(admin.router)
+app.include_router(agents.router)
+app.include_router(widgets.router)
+app.include_router(api_keys.router)
+app.include_router(conversations.router)
+app.include_router(knowledge_base.router)
 app.include_router(documents.router)
 app.include_router(chat.router)
+app.include_router(public.router)
 
 
 @app.get("/api/v1/health", tags=["health"])
 async def health_check():
-    checks: dict[str, str] = {"status": "ok", "qdrant": "unknown", "database": "unknown"}
+    """Detailed health diagnostics for all core services."""
+    checks: dict[str, str] = {
+        "status": "ok", 
+        "qdrant": "unknown", 
+        "database": "unknown", 
+        "redis": "unknown",
+        "environment": settings.environment
+    }
 
+    # 1. Qdrant
     try:
         qdrant = await get_qdrant()
         await qdrant.get_collections()
         checks["qdrant"] = "ok"
-    except Exception:
+    except Exception as e:
+        logger.error("HealthCheck Qdrant Fail: %s", str(e))
         checks["qdrant"] = "unavailable"
         checks["status"] = "degraded"
 
+    # 2. Database
     try:
         async with engine.connect() as conn:
             await conn.execute(sqlalchemy.text("SELECT 1"))
         checks["database"] = "ok"
-    except Exception:
+    except Exception as e:
+        logger.error("HealthCheck Database Fail: %s", str(e))
         checks["database"] = "unavailable"
+        checks["status"] = "degraded"
+
+    # 3. Redis
+    try:
+        redis_client = await get_redis_client()
+        await redis_client.ping()
+        checks["redis"] = "ok"
+    except Exception as e:
+        logger.error("HealthCheck Redis Fail: %s", str(e))
+        checks["redis"] = "unavailable"
         checks["status"] = "degraded"
 
     status_code = 200 if checks["status"] == "ok" else 503
@@ -100,3 +144,7 @@ async def health_check():
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 if FRONTEND_DIR.is_dir():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

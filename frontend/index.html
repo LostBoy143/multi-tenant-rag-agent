@@ -543,7 +543,9 @@
     border-radius: 50%;
     background: var(--pink);
     color: #fff;
-    display: grid; place-items: center;
+    display: flex;
+    align-items: center;
+    justify-content:center;
     font-size: 15px;
     flex-shrink: 0;
     transition: all 0.2s;
@@ -600,8 +602,8 @@
 <div class="app">
   <header>
     <div class="logo">
-      <div class="logo-mark">R</div>
-      <h1>RAG Console <span>/ test</span></h1>
+      <div class="logo-mark">{}</div>
+      <h1>RAG Console <span>/ Bolchat</span></h1>
     </div>
     <div class="health-pill" id="healthPill">
       <span class="dot"></span>
@@ -640,7 +642,7 @@
     <section id="docsSection" style="display: none;">
       <div class="section-label">Documents</div>
       <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
-        <input type="file" id="fileInput" accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" onchange="uploadFile(this.files[0])">
+        <input type="file" id="fileInput" accept=".pdf,.docx,.txt" onchange="uploadFile(this.files[0])">
         <div class="dz-icon">+</div>
         <p>Drop file or click to upload</p>
         <small>PDF, DOCX, TXT up to 20 MB</small>
@@ -772,7 +774,6 @@ async function loadDocuments() {
     const prevIds = new Set(lastDocsSnapshot ? JSON.parse(lastDocsSnapshot).map(d => d.id) : []);
     lastDocsSnapshot = snapshot;
     renderDocs(docs, prevIds);
-    if (!docs.some(d => d.status === "processing") && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   } catch {}
 }
 
@@ -857,10 +858,10 @@ async function askQuestion() {
     typingEl.remove();
     if (!r.ok) { const e = await r.json(); throw new Error(e.detail || "Query failed."); }
     const data = await r.json();
-    appendBotMsg(data.answer, data.sources);
+    appendBotMsg(data.answer);
   } catch (e) {
     typingEl.remove();
-    appendBotMsg(`Error: ${e.message}`, []);
+    appendBotMsg(`Error: ${e.message}`);
   }
 
   input.disabled = false;
@@ -878,7 +879,7 @@ function appendMsg(text, role) {
   area.scrollTop = area.scrollHeight;
 }
 
-function appendBotMsg(text, sources) {
+function appendBotMsg(text) {
   const area = document.getElementById("chatArea");
   const div = document.createElement("div");
   div.className = "msg bot";

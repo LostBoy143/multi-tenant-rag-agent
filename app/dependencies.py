@@ -1,14 +1,21 @@
-from typing import Annotated
+from typing import Annotated, Any
+from uuid import UUID
 
 import bcrypt
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status, Cookie
+from jose import JWTError
 from qdrant_client import AsyncQdrantClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.jwt import verify_token
 from app.config import settings
+from app.core.redis import redis_client
 from app.database import async_session_factory
-from app.models.tenant import APIKey, Tenant
+from app.models import APIKey, Organization, User
+
+async def get_redis_client():
+    return redis_client
 
 
 async def get_db():
@@ -33,17 +40,75 @@ async def get_qdrant() -> AsyncQdrantClient:
 QdrantDep = Annotated[AsyncQdrantClient, Depends(get_qdrant)]
 
 
+async def get_current_user(
+    db: DatabaseDep,
+    access_token: Annotated[str | None, Cookie(alias="accessToken")] = None,
+    authorization: Annotated[str | None, Header()] = None,
+) -> User:
+    """
+    JWT Authentication dependency.
+    Checks for token in 'accessToken' cookie OR 'Authorization: Bearer <token>' header.
+    """
+    token = None
+    if access_token:
+        token = access_token
+    elif authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1]
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated. Missing token.",
+        )
+
+    try:
+        payload = verify_token(token)
+        user_id_str: str = payload.get("sub")
+        token_type: str = payload.get("type")
+        
+        if token_type != "access" or user_id_str is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token payload.",
+            )
+            
+        user_id = UUID(user_id_str)
+    except (JWTError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials.",
+        )
+
+    result = await db.execute(select(User).where(User.id == user_id, User.is_active.is_(True)))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or inactive.",
+        )
+
+    return user
+
+
+CurrentUserDep = Annotated[User, Depends(get_current_user)]
+
+
 async def get_current_tenant(
     db: DatabaseDep,
     x_api_key: Annotated[str, Header()],
-) -> Tenant:
+) -> Organization:
+    """
+    API Key Authentication dependency for public widget endpoints.
+    """
     if not x_api_key or len(x_api_key) < 10:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API key.",
+            detail="Invalid API key format.",
         )
 
-    prefix = x_api_key[:8]
+    prefix = x_api_key.split(".")[0] if "." in x_api_key else x_api_key[:8]
+    
     result = await db.execute(
         select(APIKey).where(APIKey.prefix == prefix, APIKey.is_active.is_(True))
     )
@@ -55,21 +120,23 @@ async def get_current_tenant(
             detail="Invalid API key.",
         )
 
+    # API keys are hashed with bcrypt in the implementation plan
     if not bcrypt.checkpw(x_api_key.encode(), api_key_row.key_hash.encode()):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key.",
         )
 
-    result = await db.execute(select(Tenant).where(Tenant.id == api_key_row.tenant_id))
-    tenant = result.scalar_one_or_none()
-    if tenant is None:
+    result = await db.execute(select(Organization).where(Organization.id == api_key_row.organization_id))
+    org = result.scalar_one_or_none()
+    
+    if org is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Tenant not found.",
+            detail="Organization not found.",
         )
 
-    return tenant
+    return org
 
 
-CurrentTenantDep = Annotated[Tenant, Depends(get_current_tenant)]
+CurrentTenantDep = Annotated[Organization, Depends(get_current_tenant)]
