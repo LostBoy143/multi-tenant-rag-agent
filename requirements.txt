@@ -4,6 +4,7 @@ sqlalchemy[asyncio]
 asyncpg
 alembic
 qdrant-client
+fastembed
 google-genai
 pymupdf
 python-docx

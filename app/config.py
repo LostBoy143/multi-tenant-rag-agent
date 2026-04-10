@@ -10,8 +10,8 @@ class Settings(BaseSettings):
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
     gemini_api_key: str = ""
-    embedding_model: str = "gemini-embedding-001"
-    embedding_dimensions: int = 3072
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    embedding_dimensions: int = 384
     llm_model: str = "gemini-2.0-flash"
     cors_origins: list[str] = ["*"]
     max_upload_size_mb: int = 20
@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # JWT
     jwt_secret: str = "secret"
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 15
+    access_token_expire_minutes: int = 10080
     refresh_token_expire_days: int = 7
 
     # Redis
@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     # Admin
     admin_secret: str = "super-secret-admin-key"
     superadmin_email: str = "admin@bolchat.ai" # Default/Fallback
+    superadmin_password: str = "bolchat-admin-2026" # Default/Fallback
 
 
 settings = Settings()

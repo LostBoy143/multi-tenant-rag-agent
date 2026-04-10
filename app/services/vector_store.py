@@ -16,7 +16,7 @@ async def create_organization_collection(client: AsyncQdrantClient, organization
     name = _collection_name(organization_id)
     exists = await client.collection_exists(name)
     if exists:
-        logger.info("Collection %s already exists, skipping creation.", name)
+        logger.debug("Collection %s already exists, skipping creation.", name)
         return
     await client.create_collection(
         collection_name=name,
@@ -46,6 +46,7 @@ async def upsert_chunks(
     filename: str,
 ) -> None:
     name = _collection_name(organization_id)
+    await create_organization_collection(client, organization_id)
     points = [
         models.PointStruct(
             id=uuid.uuid4().hex,
@@ -77,7 +78,10 @@ async def search_chunks(
     score_threshold: float | None = None,
 ) -> list[models.ScoredPoint]:
     name = _collection_name(organization_id)
-    
+    if not await client.collection_exists(name):
+        logger.warning("Collection %s does not exist, returning empty results", name)
+        return []
+
     filter_obj = None
     if knowledge_base_ids:
         filter_obj = models.Filter(
@@ -105,6 +109,9 @@ async def delete_document_chunks(
     document_id: uuid.UUID,
 ) -> None:
     name = _collection_name(organization_id)
+    if not await client.collection_exists(name):
+        logger.warning("Collection %s does not exist, nothing to delete for doc %s", name, document_id)
+        return
     await client.delete(
         collection_name=name,
         points_selector=models.FilterSelector(

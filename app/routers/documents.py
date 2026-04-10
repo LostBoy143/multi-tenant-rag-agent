@@ -6,7 +6,7 @@ from app.core.limiter import limiter
 from sqlalchemy import select
 
 from app.config import settings
-from app.dependencies import CurrentTenantDep, DatabaseDep, QdrantDep
+from app.dependencies import CurrentUserDep, DatabaseDep, QdrantDep
 from app.models.document import Document, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase
 from app.schemas.document import DocumentResponse, UploadResponse
@@ -75,7 +75,7 @@ async def _process_document(
 async def upload_document(
     request: Request,
     file: UploadFile,
-    organization: CurrentTenantDep,
+    organization: CurrentUserDep,
     db: DatabaseDep,
     qdrant: QdrantDep,
     background_tasks: BackgroundTasks,
@@ -85,7 +85,7 @@ async def upload_document(
     kb_result = await db.execute(
         select(KnowledgeBase).where(
             KnowledgeBase.id == kb_id, 
-            KnowledgeBase.organization_id == organization.id
+            KnowledgeBase.organization_id == organization.organization_id
         )
     )
     if not kb_result.scalar_one_or_none():
@@ -109,7 +109,7 @@ async def upload_document(
     doc_id = uuid.uuid4()
     document = Document(
         id=doc_id,
-        organization_id=organization.id,
+        organization_id=organization.organization_id,
         knowledge_base_id=kb_id,
         filename=file.filename or "untitled",
         file_type=ALLOWED_CONTENT_TYPES[content_type],
@@ -122,7 +122,7 @@ async def upload_document(
     background_tasks.add_task(
         _process_document,
         document_id=doc_id,
-        organization_id=organization.id,
+        organization_id=organization.organization_id,
         knowledge_base_id=kb_id,
         file_bytes=file_bytes,
         content_type=content_type,
@@ -131,8 +131,8 @@ async def upload_document(
         qdrant_port=settings.qdrant_port,
     )
 
-    return {"success": True, "data": {
-        "document": DocumentResponse(
+    return UploadResponse(
+        document=DocumentResponse(
             id=document.id,
             filename=document.filename,
             file_type=document.file_type,
@@ -140,19 +140,19 @@ async def upload_document(
             chunk_count=document.chunk_count,
             error_message=document.error_message,
             created_at=document.created_at,
-        ),
-    }}
+        )
+    )
 
 
 @router.get("")
 @limiter.limit("60/minute")
 async def list_documents(
     request: Request,
-    organization: CurrentTenantDep,
+    organization: CurrentUserDep,
     db: DatabaseDep,
     kb_id: Annotated[uuid.UUID | None, Query(alias="kbId")] = None
 ):
-    query = select(Document).where(Document.organization_id == organization.id)
+    query = select(Document).where(Document.organization_id == organization.organization_id)
     if kb_id:
         query = query.where(Document.knowledge_base_id == kb_id)
         
@@ -176,17 +176,17 @@ async def list_documents(
 @router.delete("/{document_id}", status_code=204)
 async def delete_document(
     document_id: uuid.UUID,
-    organization: CurrentTenantDep,
+    organization: CurrentUserDep,
     db: DatabaseDep,
     qdrant: QdrantDep,
 ) -> None:
     result = await db.execute(
-        select(Document).where(Document.id == document_id, Document.organization_id == organization.id)
+        select(Document).where(Document.id == document_id, Document.organization_id == organization.organization_id)
     )
     doc = result.scalar_one_or_none()
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
 
-    await delete_document_chunks(qdrant, organization.id, document_id)
+    await delete_document_chunks(qdrant, organization.organization_id, document_id)
     await db.delete(doc)
     await db.commit()

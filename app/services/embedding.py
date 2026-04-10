@@ -1,44 +1,34 @@
 import logging
 
-from google import genai
+from fastembed import TextEmbedding
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_client: genai.Client | None = None
+_model: TextEmbedding | None = None
 
 
-def _get_client() -> genai.Client:
-    global _client
-    if _client is None:
-        _client = genai.Client(api_key=settings.gemini_api_key)
-    return _client
+def _get_model() -> TextEmbedding:
+    """Lazy-load the embedding model (singleton). First call downloads the model
+    if it's not already cached (~50MB for bge-small-en-v1.5)."""
+    global _model
+    if _model is None:
+        logger.info("Loading local embedding model: %s", settings.embedding_model)
+        _model = TextEmbedding(model_name=settings.embedding_model)
+        logger.info("Embedding model loaded successfully.")
+    return _model
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Embed a batch of texts using Gemini's embedding model. Synchronous call."""
-    client = _get_client()
-    BATCH_LIMIT = 100
-    all_embeddings: list[list[float]] = []
-
-    for i in range(0, len(texts), BATCH_LIMIT):
-        batch = texts[i : i + BATCH_LIMIT]
-        result = client.models.embed_content(
-            model=settings.embedding_model,
-            contents=batch,
-        )
-        for emb in result.embeddings:
-            all_embeddings.append(emb.values)
-
-    return all_embeddings
+    """Embed a batch of texts using the local ONNX model. Synchronous call."""
+    model = _get_model()
+    embeddings = list(model.embed(texts))
+    return [emb.tolist() for emb in embeddings]
 
 
 def embed_query(text: str) -> list[float]:
     """Embed a single query string."""
-    client = _get_client()
-    result = client.models.embed_content(
-        model=settings.embedding_model,
-        contents=text,
-    )
-    return result.embeddings[0].values
+    model = _get_model()
+    embeddings = list(model.query_embed(text))
+    return embeddings[0].tolist()

@@ -43,9 +43,10 @@ This document explains how the RAG SaaS API works end-to-end.
                                               ▲
                                               │ Embeddings
                                      ┌────────┴────────┐
-                                     │  Google Gemini   │
-                                     │  Embedding API   │
-                                     │  + LLM API       │
+                                     │     │           |
+                                     │ Local Embedding |
+                                     │  + LLM API      |
+                                     |  Google Gemini  │
                                      └─────────────────┘
 ```
 
@@ -122,6 +123,7 @@ Client                FastAPI              Background Task         Gemini       
 The upload returns immediately with `202 Accepted`. The heavy work (parsing, chunking, embedding, vector storage) happens in a FastAPI background task so the client doesn't wait.
 
 **Document parsing pipeline**:
+
 - **PDF**: PyMuPDF extracts text page by page.
 - **DOCX**: `python-docx` extracts paragraph text.
 - **TXT**: UTF-8 decode.

@@ -24,9 +24,39 @@ from app.routers import admin, agents, api_keys, chat, conversations, documents,
 setup_logging()
 logger = logging.getLogger(__name__)
 
+from app.core.init_db import init_superadmin
+
+# Start up application resources
+
+async def _reset_orphaned_documents():
+    """Mark documents stuck in 'processing' as 'failed' on startup.
+    This handles the case where the server restarted mid-background-task."""
+    from sqlalchemy import update
+    from app.database import async_session_factory
+    from app.models.document import Document, DocumentStatus
+
+    async with async_session_factory() as db:
+        result = await db.execute(
+            update(Document)
+            .where(Document.status == DocumentStatus.PROCESSING)
+            .values(
+                status=DocumentStatus.FAILED,
+                error_message="Server restarted during processing. Please re-upload.",
+            )
+        )
+        if result.rowcount > 0:
+            await db.commit()
+            logger.warning("Reset %d orphaned PROCESSING documents to FAILED.", result.rowcount)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting RAG SaaS API...")
+    
+    # Run DB initializations (Superadmin)
+    await init_superadmin()
+    await _reset_orphaned_documents()
+    
     qdrant = await get_qdrant()
     logger.info(
         "Qdrant client initialized (host=%s, port=%s)",
@@ -56,7 +86,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none';"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; connect-src 'self' http://localhost:8000 http://127.0.0.1:8000 ws://localhost:8000 ws://127.0.0.1:8000; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; frame-ancestors 'none';"
         return response
 
 app.add_middleware(SecurityHeadersMiddleware)
@@ -74,10 +104,11 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> Respon
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins if settings.cors_origins else ["*"],
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 app.include_router(auth_router)
@@ -141,10 +172,7 @@ async def health_check():
     )
 
 
-FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
-if FRONTEND_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
-
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+

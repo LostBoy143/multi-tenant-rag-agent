@@ -34,7 +34,7 @@ async def get_agent_widget(
         await db.commit()
         await db.refresh(widget)
         
-    return {"success": True, "data": widget}
+    return {"success": True, "data": _serialize_widget(widget)}
 
 
 @router.patch("/{agent_id}")
@@ -45,7 +45,6 @@ async def update_agent_widget(
     db: DatabaseDep
 ):
     """Update widget appearance and settings."""
-    # Ensure agent belongs to organization
     agent_result = await db.execute(
         select(Agent).where(Agent.id == agent_id, Agent.organization_id == user.organization_id)
     )
@@ -59,10 +58,22 @@ async def update_agent_widget(
         widget = Widget(agent_id=agent_id)
         db.add(widget)
 
-    update_data = body.model_dump(exclude_unset=True, by_alias=True)
+    update_data = body.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(widget, key, value)
 
     await db.commit()
     await db.refresh(widget)
-    return {"success": True, "data": widget}
+    return {"success": True, "data": _serialize_widget(widget)}
+
+
+def _serialize_widget(widget: Widget) -> dict:
+    return {
+        "id": str(widget.id),
+        "agent_id": str(widget.agent_id),
+        "brand_color": widget.brand_color,
+        "greeting": widget.greeting,
+        "position": widget.position,
+        "avatar_url": widget.avatar_url,
+        "theme": widget.theme,
+    }
