@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -107,8 +108,10 @@ async def get_current_tenant(
             detail="Invalid API key format.",
         )
 
-    prefix = x_api_key.split(".")[0] if "." in x_api_key else x_api_key[:8]
-    
+    # Keys are stored as bc_live_{prefix}.{secret}; DB stores only the 8-char prefix
+    raw_prefix = x_api_key.split(".")[0] if "." in x_api_key else x_api_key[:8]
+    prefix = raw_prefix.replace("bc_live_", "")
+
     result = await db.execute(
         select(APIKey).where(APIKey.prefix == prefix, APIKey.is_active.is_(True))
     )
@@ -120,16 +123,26 @@ async def get_current_tenant(
             detail="Invalid API key.",
         )
 
-    # API keys are hashed with bcrypt in the implementation plan
     if not bcrypt.checkpw(x_api_key.encode(), api_key_row.key_hash.encode()):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key.",
         )
 
+    # Check expiration if set
+    if api_key_row.expires_at and api_key_row.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API key has expired.",
+        )
+
+    # Update last_used_at
+    api_key_row.last_used_at = datetime.now(timezone.utc)
+    await db.commit()
+
     result = await db.execute(select(Organization).where(Organization.id == api_key_row.organization_id))
     org = result.scalar_one_or_none()
-    
+
     if org is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
