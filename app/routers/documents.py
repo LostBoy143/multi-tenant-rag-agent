@@ -28,8 +28,6 @@ async def _process_document(
     file_bytes: bytes,
     content_type: str,
     filename: str,
-    qdrant_host: str,
-    qdrant_port: int,
 ) -> None:
     """Background task: parse -> chunk -> embed -> store in Qdrant."""
     from qdrant_client import AsyncQdrantClient
@@ -47,7 +45,13 @@ async def _process_document(
 
             embeddings = embed_texts(chunks)
 
-            qdrant = AsyncQdrantClient(host=qdrant_host, port=qdrant_port)
+            if settings.qdrant_url and settings.qdrant_api_key:
+                qdrant = AsyncQdrantClient(
+                    url=settings.qdrant_url,
+                    api_key=settings.qdrant_api_key
+                )
+            else:
+                qdrant = AsyncQdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
             await upsert_chunks(
                 qdrant, organization_id, document_id, knowledge_base_id, chunks, embeddings, filename
             )
@@ -127,8 +131,6 @@ async def upload_document(
         file_bytes=file_bytes,
         content_type=content_type,
         filename=file.filename or "untitled",
-        qdrant_host=settings.qdrant_host,
-        qdrant_port=settings.qdrant_port,
     )
 
     return UploadResponse(
@@ -187,6 +189,9 @@ async def delete_document(
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
 
-    await delete_document_chunks(qdrant, organization.organization_id, document_id)
+    try:
+        await delete_document_chunks(qdrant, organization.organization_id, document_id)
+    except Exception as e:
+        logger.warning("Failed to delete chunks from Qdrant for doc %s: %s", document_id, e)
     await db.delete(doc)
     await db.commit()

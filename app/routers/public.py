@@ -129,6 +129,7 @@ async def public_query(
                 role=MessageRole.ASSISTANT,
                 content=response.answer,
                 sources=[s.model_dump() for s in response.sources],
+                response_time_ms=response.response_time_ms,
             )
             db.add_all([user_msg, assistant_msg])
             await db.commit()

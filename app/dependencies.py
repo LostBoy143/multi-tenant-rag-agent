@@ -32,9 +32,15 @@ _qdrant_client: AsyncQdrantClient | None = None
 async def get_qdrant() -> AsyncQdrantClient:
     global _qdrant_client
     if _qdrant_client is None:
-        _qdrant_client = AsyncQdrantClient(
-            host=settings.qdrant_host, port=settings.qdrant_port
-        )
+        if settings.qdrant_url and settings.qdrant_api_key:
+            _qdrant_client = AsyncQdrantClient(
+                url=settings.qdrant_url,
+                api_key=settings.qdrant_api_key
+            )
+        else:
+            _qdrant_client = AsyncQdrantClient(
+                host=settings.qdrant_host, port=settings.qdrant_port
+            )
     return _qdrant_client
 
 

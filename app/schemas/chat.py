@@ -21,3 +21,4 @@ class SourceChunk(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     sources: list[SourceChunk]
+    response_time_ms: int | None = None

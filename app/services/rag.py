@@ -1,4 +1,5 @@
 import logging
+import time
 import uuid
 from functools import partial
 
@@ -59,8 +60,8 @@ to help!"
 
 NO_CONTEXT_INSTRUCTION = """\
 You are a friendly chatbot on a company's website. The user asked something \
-you don't have information about. Respond in 1 sentence — something like \
-"Hmm, I'm not sure about that. Want to try asking something else?" \
+you don't have information about. Respond in 1 sentence to let them know \
+you aren't sure, and offer further help. \
 Do NOT say "no documents found" or anything about a knowledge base. \
 Keep it casual and human. No markdown formatting.
 """
@@ -68,7 +69,7 @@ Keep it casual and human. No markdown formatting.
 GREETING_INSTRUCTION = """\
 You are a friendly chatbot on a company's website. The user just said hi or \
 something casual. Reply with a brief, warm 1-sentence greeting and offer to \
-help. Example: "Hey! How can I help you today?" Do NOT provide any information \
+help. Do NOT provide any information \
 about the company. Do NOT use markdown. Just be friendly and short.
 """
 
@@ -158,12 +159,28 @@ async def answer_query(
     temperature = float(agent_settings.get("temperature", 0.4))
     max_tokens = int(agent_settings.get("max_tokens", 1024))
 
+    # Append language guidance to the system instructions
+    lang_code = agent_settings.get("language")
+    lang_instruction = ""
+    if lang_code and lang_code != "en":
+        langs = {
+            "es": "Spanish", "fr": "French", "de": "German", "it": "Italian", "pt": "Portuguese",
+            "zh": "Chinese", "ja": "Japanese", "ar": "Arabic", "ru": "Russian",
+            "hi": "Hindi", "bn": "Bengali", "te": "Telugu", "mr": "Marathi", "ta": "Tamil",
+            "ur": "Urdu", "gu": "Gujarati", "kn": "Kannada", "ml": "Malayalam", "pa": "Punjabi"
+        }
+        lang_name = langs.get(lang_code, lang_code)
+        lang_instruction = f"\n\nCRITICAL LANGUAGE INSTRUCTION: You MUST identify the language the user is speaking and reply in that exact same language. However, if the user's text is gibberish, ambiguous, or unrecognizable, your absolute fallback language is {lang_name}. Do NOT fallback to English or any other language."
+        system_instruction += lang_instruction
+
     # 2. Short-circuit for greetings -- no vector search needed
     if _is_greeting(question):
+        t0 = time.perf_counter()
         answer_text = await to_thread.run_sync(
-            partial(_sync_generate, GREETING_INSTRUCTION, question, temperature, max_tokens)
+            partial(_sync_generate, GREETING_INSTRUCTION + lang_instruction, question, temperature, max_tokens)
         )
-        return QueryResponse(answer=answer_text, sources=[])
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        return QueryResponse(answer=answer_text, sources=[], response_time_ms=elapsed_ms)
 
     # 3. Vector search (all org documents)
     query_vector = await to_thread.run_sync(partial(embed_query, question))
@@ -176,10 +193,12 @@ async def answer_query(
     )
 
     if not results:
+        t0 = time.perf_counter()
         answer_text = await to_thread.run_sync(
-            partial(_sync_generate, NO_CONTEXT_INSTRUCTION, question, temperature, max_tokens)
+            partial(_sync_generate, NO_CONTEXT_INSTRUCTION + lang_instruction, question, temperature, max_tokens)
         )
-        return QueryResponse(answer=answer_text, sources=[])
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        return QueryResponse(answer=answer_text, sources=[], response_time_ms=elapsed_ms)
 
     sources: list[SourceChunk] = []
     context_texts: list[str] = []
@@ -203,8 +222,10 @@ async def answer_query(
     context_message = _build_context_message(context_texts)
     user_message = f"{context_message}\n\nUSER QUESTION: {question}"
 
+    t0 = time.perf_counter()
     answer_text = await to_thread.run_sync(
         partial(_sync_generate, system_instruction, user_message, temperature, max_tokens)
     )
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
-    return QueryResponse(answer=answer_text, sources=sources)
+    return QueryResponse(answer=answer_text, sources=sources, response_time_ms=elapsed_ms)

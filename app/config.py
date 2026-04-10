@@ -6,10 +6,12 @@ class Settings(BaseSettings):
 
     environment: str = "development" # "development" or "production"
 
-    database_url: str = "postgresql+asyncpg://postgres:dev@localhost:5432/rag_saas"
+    database_url: str
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
-    gemini_api_key: str = ""
+    qdrant_url: str | None = None
+    qdrant_api_key: str | None = None
+    gemini_api_key: str
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_dimensions: int = 384
     llm_model: str = "gemini-2.0-flash"
@@ -21,13 +23,13 @@ class Settings(BaseSettings):
     rag_score_threshold: float = 0.3
 
     # JWT
-    jwt_secret: str = "secret"
+    jwt_secret: str
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 10080
     refresh_token_expire_days: int = 7
 
     # Redis
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str
 
     # Email
     smtp_host: str = ""
@@ -40,9 +42,9 @@ class Settings(BaseSettings):
     app_url: str = "http://localhost:3000"
 
     # Admin
-    admin_secret: str = "super-secret-admin-key"
-    superadmin_email: str = "admin@bolchat.ai" # Default/Fallback
-    superadmin_password: str = "bolchat-admin-2026" # Default/Fallback
+    admin_secret: str
+    superadmin_email: str
+    superadmin_password: str
 
 
 settings = Settings()

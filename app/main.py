@@ -18,7 +18,7 @@ from app.core.logging_config import setup_logging
 from app.database import engine
 from app.dependencies import get_qdrant, get_redis_client
 from app.auth.router import router as auth_router
-from app.routers import admin, agents, api_keys, chat, conversations, documents, knowledge_base, public, widgets
+from app.routers import admin, agents, analytics, api_keys, chat, conversations, documents, knowledge_base, public, widgets
 
 # Configure structured logging
 setup_logging()
@@ -58,11 +58,14 @@ async def lifespan(app: FastAPI):
     await _reset_orphaned_documents()
     
     qdrant = await get_qdrant()
-    logger.info(
-        "Qdrant client initialized (host=%s, port=%s)",
-        settings.qdrant_host,
-        settings.qdrant_port,
-    )
+    if settings.qdrant_url:
+        logger.info("Qdrant client initialized (Cloud URL: %s)", settings.qdrant_url)
+    else:
+        logger.info(
+            "Qdrant client initialized (host=%s, port=%s)",
+            settings.qdrant_host,
+            settings.qdrant_port,
+        )
     yield
     logger.info("Shutting down RAG SaaS API...")
     if qdrant:
@@ -86,7 +89,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; connect-src 'self' http://localhost:8000 http://127.0.0.1:8000 ws://localhost:8000 ws://127.0.0.1:8000; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; frame-ancestors 'none';"
+        
+        # CSP allows CDN JS/CSS so Swagger Docs can load
+        csp = (
+            "default-src 'self'; "
+            "connect-src 'self' http://localhost:8000 http://127.0.0.1:8000 ws://localhost:8000 ws://127.0.0.1:8000; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+            "font-src 'self' https://fonts.gstatic.com; "
+            "img-src 'self' data: https://fastapi.tiangolo.com; "
+            "frame-ancestors 'none';"
+        )
+        response.headers["Content-Security-Policy"] = csp
         return response
 
 app.add_middleware(SecurityHeadersMiddleware)
@@ -113,6 +127,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(admin.router)
+app.include_router(analytics.router)
 app.include_router(agents.router)
 app.include_router(widgets.router)
 app.include_router(api_keys.router)
