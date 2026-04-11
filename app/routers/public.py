@@ -135,3 +135,26 @@ async def public_query(
             await db.commit()
 
     return {"success": True, "data": {"answer": response.answer, "sources": [s.model_dump() for s in response.sources]}}
+
+from pydantic import BaseModel, EmailStr
+class LeadRequest(BaseModel):
+    name: str
+    email: EmailStr
+    company: str
+    requirements: str
+
+@router.post("/lead", status_code=201)
+@limiter.limit("5/minute")
+async def capture_lead(
+    request: Request,
+    body: LeadRequest,
+):
+    """Capture leads from the marketing landing page."""
+    from app.core.email import send_lead_email
+    await send_lead_email(
+        name=body.name,
+        email=body.email,
+        company=body.company,
+        requirements=body.requirements
+    )
+    return {"success": True, "message": "Lead captured successfully"}

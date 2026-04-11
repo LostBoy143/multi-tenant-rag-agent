@@ -54,3 +54,18 @@ async def send_welcome_email(email: EmailStr, temporary_password: str):
     </html>
     """
     await send_email([email], subject, body)
+
+async def send_lead_email(name: str, email: str, company: str, requirements: str):
+    subject = f"🚀 New BolChat Lead: {company}"
+    body = f"""
+    <html>
+        <body>
+            <h2>New Landing Page Lead</h2>
+            <p><strong>Name:</strong> {name}</p>
+            <p><strong>Email:</strong> {email}</p>
+            <p><strong>Company:</strong> {company}</p>
+            <p><strong>Requirements:</strong><br/>{requirements}</p>
+        </body>
+    </html>
+    """
+    await send_email([settings.superadmin_email], subject, body)
