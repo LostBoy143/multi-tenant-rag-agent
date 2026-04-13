@@ -132,7 +132,74 @@ In Docker, this is handled by the `command` in `docker-compose.yml`. In Kubernet
 
 ## 4. Cloud Deployment Options
 
-### Option A: Railway / Render / Fly.io (Simplest)
+### Option A: Azure App Service for Containers
+
+This image is ready for Azure App Service for Containers as long as the App Service
+settings point Azure to the same HTTP port the container listens on.
+
+Recommended app settings:
+
+```env
+WEBSITES_PORT=8000
+PORT=8000
+ENVIRONMENT=production
+LOG_LEVEL=INFO
+STARTUP_FAIL_FAST=false
+STARTUP_CHECK_RETRIES=3
+STARTUP_CHECK_INTERVAL_SECONDS=3
+STARTUP_CHECK_TIMEOUT_SECONDS=10
+RUN_MIGRATIONS_ON_STARTUP=false
+CORS_ORIGINS=https://your-frontend-domain.com
+CORS_ALLOW_CREDENTIALS=true
+```
+
+Required secrets/settings:
+
+```env
+DATABASE_URL=postgresql+asyncpg://<user>:<password>@<postgres-host>:5432/<db>
+REDIS_URL=rediss://:<password>@<redis-host>:6380/0
+QDRANT_URL=https://<cluster>.<region>.cloud.qdrant.io
+QDRANT_API_KEY=<qdrant-api-key>
+GEMINI_API_KEY=<gemini-api-key>
+JWT_SECRET=<long-random-secret>
+ADMIN_SECRET=<long-random-secret>
+SUPERADMIN_EMAIL=<admin-email>
+SUPERADMIN_PASSWORD=<strong-password>
+APP_URL=https://your-frontend-domain.com
+```
+
+For schema changes, prefer running migrations as a release step before restarting
+the web app:
+
+```bash
+alembic upgrade head
+```
+
+If you intentionally want the web container to run migrations before boot, set
+`RUN_MIGRATIONS_ON_STARTUP=true`. Keep it `false` while debugging
+`UnexpectedContainerExit`, because a database connection failure during migrations
+will terminate the container before the HTTP worker binds.
+
+Diagnostics:
+
+- `GET /` is a lightweight liveness endpoint for platform pings.
+- `GET /api/v1/health` checks PostgreSQL, Qdrant, and Redis and returns `503`
+  when any dependency is unavailable.
+- Startup logs include `database`, `qdrant`, and `redis` dependency states.
+- Use Azure log streaming after enabling container filesystem logging:
+
+```bash
+az webapp log config \
+  --name <app-name> \
+  --resource-group <resource-group> \
+  --docker-container-logging filesystem
+
+az webapp log tail \
+  --name <app-name> \
+  --resource-group <resource-group>
+```
+
+### Option B: Railway / Render / Fly.io (Simplest)
 
 These PaaS platforms support Docker images directly.
 
@@ -142,7 +209,7 @@ These PaaS platforms support Docker images directly.
 4. The platform auto-builds from `Dockerfile` and deploys.
 5. Use their managed PostgreSQL add-on. For Qdrant, use [Qdrant Cloud](https://cloud.qdrant.io) (free tier available).
 
-### Option B: AWS (ECS + Fargate)
+### Option C: AWS (ECS + Fargate)
 
 1. Push your Docker image to ECR:
    ```bash
@@ -158,7 +225,7 @@ These PaaS platforms support Docker images directly.
 6. Use an Application Load Balancer (ALB) in front of ECS.
 7. Store secrets in AWS Secrets Manager and reference them in the task definition.
 
-### Option C: GCP (Cloud Run)
+### Option D: GCP (Cloud Run)
 
 1. Build and push to Google Artifact Registry:
    ```bash
@@ -175,7 +242,7 @@ These PaaS platforms support Docker images directly.
 3. Use Cloud SQL for PostgreSQL.
 4. Use Qdrant Cloud or a GCE instance for Qdrant.
 
-### Option D: Kubernetes
+### Option E: Kubernetes
 
 1. Create Deployment and Service manifests for the API.
 2. Deploy PostgreSQL via Helm chart (`bitnami/postgresql`) or use a managed database.
@@ -276,6 +343,7 @@ jobs:
 ## 8. Production Checklist
 
 - [ ] Environment variables set via secrets manager (not `.env` files)
+- [ ] Azure App Service has `WEBSITES_PORT=8000` set for this image
 - [ ] `CORS_ORIGINS` restricted to your actual frontend domain(s)
 - [ ] TLS/HTTPS enabled on all public endpoints
 - [ ] Database connection pooling configured (SQLAlchemy pool defaults are usually fine; tune `pool_size` and `max_overflow` for load)

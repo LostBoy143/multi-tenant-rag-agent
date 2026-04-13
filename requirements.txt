@@ -1,5 +1,6 @@
 fastapi[standard]
 uvicorn[standard]
+gunicorn
 sqlalchemy[asyncio]
 asyncpg
 alembic
@@ -19,9 +20,6 @@ qrcode[pil]
 redis[asyncio]
 fastapi-mail
 aiosmtplib
-pytest
-pytest-asyncio
-httpx
 pytest
 pytest-asyncio
 httpx

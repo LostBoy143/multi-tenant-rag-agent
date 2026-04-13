@@ -1,10 +1,15 @@
+import json
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     environment: str = "development" # "development" or "production"
+    port: int = 8000
+    log_level: str = "INFO"
 
     database_url: str
     qdrant_host: str = "localhost"
@@ -16,11 +21,16 @@ class Settings(BaseSettings):
     embedding_dimensions: int = 384
     llm_model: str = "gemini-2.0-flash"
     cors_origins: list[str] = ["*"]
+    cors_allow_credentials: bool = True
     max_upload_size_mb: int = 20
     chunk_size: int = 500
     chunk_overlap: int = 50
     rag_top_k: int = 5
     rag_score_threshold: float = 0.3
+    startup_fail_fast: bool = False
+    startup_check_retries: int = 3
+    startup_check_interval_seconds: float = 3.0
+    startup_check_timeout_seconds: float = 10.0
 
     # JWT
     jwt_secret: str
@@ -45,6 +55,18 @@ class Settings(BaseSettings):
     admin_secret: str
     superadmin_email: str
     superadmin_password: str
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, value):
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return []
+            if value.startswith("["):
+                return json.loads(value)
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
 
 
 settings = Settings()
