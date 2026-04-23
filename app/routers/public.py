@@ -60,8 +60,19 @@ async def get_widget_config(
             "greeting": widget.greeting if widget else "Hi! How can I help you today?",
             "position": widget.position if widget else "bottom-right",
             "avatar_url": widget.avatar_url if widget else None,
+            # Launcher customization
             "launcher_icon": theme.get("launcher_icon", "chat"),
+            "launcher_text": theme.get("launcher_text", ""),
+            "launcher_shape": theme.get("launcher_shape", "circle"),
+            "tooltip_text": theme.get("tooltip_text", ""),
             "chat_height": theme.get("chat_height", 520),
+            # v4 — Modern features (all optional, off by default)
+            "teaser_text": theme.get("teaser_text", ""),
+            "glass_effect": theme.get("glass_effect", False),
+            "gradient_enabled": theme.get("gradient_enabled", False),
+            "attention_dot": theme.get("attention_dot", False),
+            "entrance_animation": theme.get("entrance_animation", "none"),
+            "suggested_replies": theme.get("suggested_replies", []),
         },
     }
 

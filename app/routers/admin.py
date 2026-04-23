@@ -191,3 +191,73 @@ async def list_organizations(
         })
 
     return {"success": True, "data": data}
+
+from app.services.vector_store import delete_organization_collection
+
+@router.delete("/organizations/{org_id}")
+async def delete_organization(
+    org_id: uuid.UUID,
+    db: DatabaseDep,
+    qdrant: QdrantDep,
+    _: AdminDep
+):
+    """Permanently delete an organization and all its data."""
+    org_res = await db.execute(select(Organization).where(Organization.id == org_id))
+    org = org_res.scalar_one_or_none()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+        
+    if org.slug == "system":
+        raise HTTPException(status_code=403, detail="Cannot delete the root System organization as it would destroy admin access.")
+
+    # Delete from Qdrant vector database first
+    await delete_organization_collection(qdrant, org.id)
+
+    # Delete from PostgreSQL database (SQLAlchemy deletes cascaded items automatically)
+    await db.delete(org)
+    await db.commit()
+
+    return {"success": True, "message": "Organization and related data permanently deleted"}
+
+@router.get("/organizations/{org_id}/usage")
+async def get_organization_usage(
+    org_id: uuid.UUID,
+    db: DatabaseDep,
+    _: AdminDep
+):
+    """Get detailed usage insights (conversations, messages) for a specific organization."""
+    from sqlalchemy import func
+    from app.models.agent import Agent
+    from app.models.document import Document
+    from app.models.conversation import Conversation, Message
+
+    org_res = await db.execute(select(Organization).where(Organization.id == org_id))
+    org = org_res.scalar_one_or_none()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    agent_count = await db.execute(select(func.count()).select_from(Agent).where(Agent.organization_id == org_id))
+    user_count = await db.execute(select(func.count()).select_from(User).where(User.organization_id == org_id))
+    doc_count = await db.execute(select(func.count()).select_from(Document).where(Document.organization_id == org_id))
+    conv_count = await db.execute(select(func.count()).select_from(Conversation).where(Conversation.organization_id == org_id))
+    
+    msg_count = await db.execute(
+        select(func.count())
+        .select_from(Message)
+        .join(Conversation)
+        .where(Conversation.organization_id == org_id)
+    )
+
+    return {
+        "success": True, 
+        "data": {
+            "id": org.id,
+            "name": org.name,
+            "slug": org.slug,
+            "agents": agent_count.scalar() or 0,
+            "users": user_count.scalar() or 0,
+            "documents": doc_count.scalar() or 0,
+            "conversations": conv_count.scalar() or 0,
+            "messages": msg_count.scalar() or 0
+        }
+    }
