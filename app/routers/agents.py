@@ -184,7 +184,7 @@ async def preview_agent_chat(
 
     qdrant = await get_qdrant()
     try:
-        response = await answer_query(
+        response, _ = await answer_query(
             qdrant=qdrant,
             organization_id=user.organization_id,
             agent_id=agent_id,

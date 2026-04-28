@@ -24,6 +24,14 @@
   let teaserTimer = null;
   let hasEnteredView = false;
 
+  /* ── Persistent Visitor ID (Long-Term Memory) ── */
+  const VISITOR_STORAGE_KEY = `bc_visitor_${AGENT_ID}`;
+  let visitorId = localStorage.getItem(VISITOR_STORAGE_KEY);
+  if (!visitorId) {
+    visitorId = crypto.randomUUID ? crypto.randomUUID() : ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
+    localStorage.setItem(VISITOR_STORAGE_KEY, visitorId);
+  }
+
   let cfg = {
     agent_name: "BolChat AI",
     brand_color: "#ec4899",
@@ -83,7 +91,9 @@
   }
 
   function reqHeaders() {
-    return { "Content-Type": "application/json", "X-API-Key": API_KEY, "X-Agent-ID": AGENT_ID };
+    const h = { "Content-Type": "application/json", "X-API-Key": API_KEY, "X-Agent-ID": AGENT_ID };
+    if (visitorId) h["X-Visitor-ID"] = visitorId;
+    return h;
   }
 
   /* ── CSS Builder ── */
@@ -440,7 +450,18 @@
 
       /* ── Mobile ── */
       @media (max-width: 480px) {
-        .bc-panel { width: calc(100vw - 20px); max-height: calc(100vh - 104px); bottom: 84px; }
+        .bc-panel { 
+          width: calc(100vw - 20px) !important; 
+          left: 10px !important; 
+          right: 10px !important;
+          top: 10vh !important;
+          top: 10dvh !important;
+          bottom: auto !important;
+          height: calc(90vh - 84px) !important;
+          height: calc(90dvh - 84px) !important;
+          max-height: none !important;
+          transform-origin: bottom center;
+        }
         .bc-launcher { bottom: 18px; }
         .bc-shape-circle, .bc-shape-rounded, .bc-shape-square, .bc-shape-flower { width: 56px; height: 56px; }
         .bc-shape-pill { min-width: 56px; height: 52px; }
@@ -477,7 +498,14 @@
       method: "POST", headers: h,
       body: JSON.stringify({ agent_id: AGENT_ID, question }),
     });
-    if (!res.ok) throw new Error("Failed");
+    if (!res.ok) {
+      let msg = "Sorry, something went wrong. Please try again.";
+      try {
+        const errJson = await res.json();
+        if (errJson.detail) msg = errJson.detail;
+      } catch (e) { /* ignore parse error */ }
+      throw new Error(msg);
+    }
     const json = await res.json();
     return json.data?.answer || json.answer || "Sorry, I couldn't process that.";
   }
@@ -531,7 +559,7 @@
       class: `bc-launcher ${extraClasses}`,
       type: "button",
       "aria-label": isOpen ? "Close BolChat" : "Open BolChat",
-      style: { [side]: "22px", position: "relative" },
+      style: { [side]: "22px" },
       onClick: toggleChat,
     },
       html(icon(isOpen ? "close" : cfg.launcher_icon)),
@@ -650,13 +678,13 @@
     const userSent = messages.some(m => m.from === "user");
     const suggestionsEl = (Array.isArray(replies) && replies.length > 0 && !userSent && !isLoading)
       ? el("div", { class: "bc-suggestions" },
-          ...replies.slice(0, 3).map(text =>
-            el("button", {
-              class: "bc-suggestion", type: "button",
-              onClick: () => { quickSend(text); },
-            }, text)
-          )
+        ...replies.slice(0, 3).map(text =>
+          el("button", {
+            class: "bc-suggestion", type: "button",
+            onClick: () => { quickSend(text); },
+          }, text)
         )
+      )
       : null;
 
     const footer = el("footer", { class: "bc-footer" });
@@ -704,8 +732,8 @@
     render();
     sendQuery(text).then(answer => {
       messages.push({ from: "bot", text: answer });
-    }).catch(() => {
-      messages.push({ from: "bot", text: "Sorry, something went wrong. Please try again." });
+    }).catch((err) => {
+      messages.push({ from: "bot", text: err.message || "Sorry, something went wrong. Please try again." });
     }).finally(() => {
       isLoading = false;
       render();

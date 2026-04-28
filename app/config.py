@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None
     gemini_api_key: str
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.3-70b-versatile"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_dimensions: int = 384
     llm_model: str = "gemini-2.0-flash"

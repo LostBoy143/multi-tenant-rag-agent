@@ -5,6 +5,7 @@ from app.models.document import Document, DocumentStatus
 from app.models.agent import Agent, AgentKnowledgeBase
 from app.models.widget import Widget
 from app.models.conversation import Conversation, Message, MessageRole
+from app.models.lead import Lead, LeadStatus
 
 __all__ = [
     "Organization", 
@@ -18,5 +19,7 @@ __all__ = [
     "Widget",
     "Conversation",
     "Message",
-    "MessageRole"
+    "MessageRole",
+    "Lead",
+    "LeadStatus"
 ]
