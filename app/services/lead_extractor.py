@@ -75,14 +75,15 @@ def strip_lead_block(text: str) -> tuple[str, dict | None]:
 
 def _extract_email_from_text(text: str) -> str | None:
     matches = _EMAIL_RE.findall(text)
-    return matches[0].lower() if matches else None
+    return matches[-1].lower() if matches else None
 
 
 def _extract_phone_from_text(text: str) -> str | None:
     matches = _PHONE_RE.findall(text)
     if not matches:
         return None
-    raw = matches[0].strip()
+    # Use the most recent phone number provided in case of corrections
+    raw = matches[-1].strip()
     # Must have at least 7 digits
     digits = re.sub(r"\D", "", raw)
     return raw if len(digits) >= 7 else None
@@ -233,16 +234,18 @@ async def process_lead_from_message(
         existing = existing_result.scalar_one_or_none()
 
         if existing:
-            # Enrich: never overwrite existing truthy values with None
-            if email and not existing.email:
+            # Enrich: update with fresh data when provided (allows user corrections).
+            # We overwrite existing values if the user supplies a new one in this exchange,
+            # but never replace a known value with None/empty.
+            if email:
                 existing.email = email
-            if phone and not existing.phone:
+            if phone:
                 existing.phone = phone
-            if name and not existing.name:
+            if name:
                 existing.name = name
-            if company and not existing.company:
+            if company:
                 existing.company = company
-            if interest and not existing.interest:
+            if interest:
                 existing.interest = interest
             if source_url and not existing.source_url:
                 existing.source_url = source_url

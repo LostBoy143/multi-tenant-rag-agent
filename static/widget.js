@@ -23,6 +23,63 @@
   let teaserDismissed = false;
   let teaserTimer = null;
   let hasEnteredView = false;
+  let savedBodyOverflow = "";
+
+  /* ── Mobile detection ── */
+  function isMobile() { return window.innerWidth <= 480; }
+
+  function lockBodyScroll() {
+    savedBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+  }
+  function unlockBodyScroll() {
+    document.body.style.overflow = savedBodyOverflow || "";
+  }
+
+  function syncPanelToViewport() {
+    if (!isOpen || !isMobile() || !shadowRoot) return;
+    
+    const panel = shadowRoot.querySelector(".bc-panel");
+    if (panel) {
+      const top = window.visualViewport ? window.visualViewport.pageTop : window.scrollY;
+      const height = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+      panel.style.top = `${top}px`;
+      panel.style.height = `${height}px`;
+      panel.style.bottom = "auto";
+    }
+
+    /* Adjust message bottom padding if suggestions exist so they don't overlap */
+    const footer = shadowRoot.querySelector(".bc-footer");
+    const msgs = shadowRoot.getElementById("bc-messages");
+    if (footer && msgs) {
+      msgs.style.bottom = `${footer.offsetHeight}px`;
+    }
+
+    /* Scroll messages to bottom so latest message is visible above keyboard */
+    if (msgs) {
+      setTimeout(() => {
+        msgs.scrollTop = msgs.scrollHeight;
+      }, 50);
+    }
+  }
+
+  let vvListenerAttached = false;
+  function attachViewportListeners() {
+    if (vvListenerAttached || !window.visualViewport) return;
+    window.visualViewport.addEventListener("resize", syncPanelToViewport);
+    window.visualViewport.addEventListener("scroll", syncPanelToViewport);
+    vvListenerAttached = true;
+  }
+
+  function resetPanelSize() {
+    if (!shadowRoot) return;
+    const panel = shadowRoot.querySelector(".bc-panel");
+    if (panel) {
+      panel.style.top = "";
+      panel.style.height = "";
+      panel.style.bottom = "";
+    }
+  }
 
   /* ── Persistent Visitor ID (Long-Term Memory) ── */
   const VISITOR_STORAGE_KEY = `bc_visitor_${AGENT_ID}`;
@@ -69,7 +126,7 @@
   function brand() { return cfg.brand_color || "#ec4899"; }
   function icon(name) { return ICONS[name] || ICONS.chat; }
   function html(s) { return { __html: s }; }
-  function isLeft() { return cfg.position === "bottom_left" || cfg.position === "bottom-left"; }
+  function isLeft() { const p = (cfg.position || "").toLowerCase().replace(/[_\s]/g, "-"); return p === "bottom-left" || p === "left" || p === "bottomleft"; }
 
   function el(tag, attrs, ...children) {
     const node = document.createElement(tag);
@@ -448,25 +505,128 @@
       .bc-powered { padding: 0 12px 9px; text-align: center; color: #98a2b3; font-size: 10px; line-height: 1.2; }
       .bc-powered a { color: #667085; font-weight: 700; text-decoration: none; }
 
-      /* ── Mobile ── */
+      /* ══════════════════ MOBILE — FULL SCREEN (WhatsApp Style) ══════════════════ */
       @media (max-width: 480px) {
-        .bc-panel { 
-          width: calc(100vw - 20px) !important; 
-          left: 10px !important; 
-          right: 10px !important;
-          top: 10vh !important;
-          top: 10dvh !important;
-          bottom: auto !important;
-          height: calc(90vh - 84px) !important;
-          height: calc(90dvh - 84px) !important;
+        .bc-panel {
+          position: absolute !important; /* Absolute positioning tracks the document perfectly */
+          left: 0 !important;
+          right: 0 !important;
+          width: 100vw !important;
+          max-width: none !important;
           max-height: none !important;
-          transform-origin: bottom center;
+          border-radius: 0 !important;
+          border: none !important;
+          box-shadow: none !important;
+          padding-top: env(safe-area-inset-top, 0px);
+          display: block !important; 
+          /* Remove transition on height/top so it tracks the keyboard instantly without lag */
+          transition: opacity 180ms ease, transform 180ms ease;
         }
-        .bc-launcher { bottom: 18px; }
+        .bc-panel.bc-hidden {
+          opacity: 0;
+          pointer-events: none;
+          transform: translateY(100%);
+        }
+        .bc-panel.bc-visible {
+          opacity: 1;
+          transform: translateY(0);
+        }
+
+        /* 1. Header locked to top */
+        .bc-header {
+          position: absolute;
+          top: env(safe-area-inset-top, 0px);
+          left: 0;
+          right: 0;
+          height: 64px;
+          min-height: 64px;
+          padding: 14px 16px;
+          border-radius: 0;
+          z-index: 10;
+        }
+        .bc-close {
+          width: 38px;
+          height: 38px;
+          border-radius: 10px;
+        }
+
+        /* 2. Messages shrink/grow between header and footer */
+        .bc-messages {
+          position: absolute;
+          top: calc(64px + env(safe-area-inset-top, 0px));
+          /* Default bottom assuming footer is ~64px without suggestions */
+          bottom: calc(64px + env(safe-area-inset-bottom, 0px)); 
+          left: 0;
+          right: 0;
+          padding: 16px 14px;
+          overflow-y: auto;
+          -webkit-overflow-scrolling: touch; /* Smooth scroll on iOS */
+        }
+        .bc-bubble {
+          max-width: 84%;
+          font-size: 15px;
+        }
+
+        /* 3. Footer locked to bottom */
+        .bc-footer {
+          position: absolute;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          background: #fff;
+          padding-bottom: env(safe-area-inset-bottom, 0px);
+          z-index: 10;
+        }
+        .bc-composer {
+          padding: 10px 12px;
+        }
+        .bc-input {
+          height: 44px;
+          font-size: 16px; /* prevents iOS zoom on focus */
+          border-radius: 22px;
+          padding: 0 16px;
+        }
+        .bc-send {
+          width: 44px;
+          height: 44px;
+          border-radius: 22px;
+        }
+        .bc-powered {
+          padding: 4px 12px calc(6px + env(safe-area-inset-bottom, 0px));
+        }
+
+        /* Suggestions — scrollable row on mobile */
+        .bc-suggestions {
+          flex-wrap: nowrap;
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+          padding: 8px 12px 4px;
+          gap: 6px;
+          scrollbar-width: none;
+        }
+        .bc-suggestions::-webkit-scrollbar { display: none; }
+        .bc-suggestion {
+          flex-shrink: 0;
+          font-size: 13px;
+          padding: 8px 14px;
+        }
+
+        /* Launcher — hide ONLY when chat is open */
+        .bc-launcher { 
+          bottom: 18px; 
+          z-index: 2147483647; 
+        }
+        .bc-launcher.bc-launcher-hidden { 
+          display: none !important; 
+        }
+        .bc-tooltip-wrap.bc-launcher-hidden { 
+          display: none !important; 
+        }
         .bc-shape-circle, .bc-shape-rounded, .bc-shape-square, .bc-shape-flower { width: 56px; height: 56px; }
         .bc-shape-pill { min-width: 56px; height: 52px; }
         .bc-launcher-text { display: none; }
-        .bc-bubble { max-width: 82%; }
+
+        /* Teaser */
         .bc-teaser { max-width: 240px; bottom: 82px; font-size: 13px; }
       }
     `;
@@ -556,7 +716,7 @@
     ].filter(Boolean).join(" ");
 
     const btn = el("button", {
-      class: `bc-launcher ${extraClasses}`,
+      class: `bc-launcher ${extraClasses}${(isOpen && isMobile()) ? " bc-launcher-hidden" : ""}`,
       type: "button",
       "aria-label": isOpen ? "Close BolChat" : "Open BolChat",
       style: { [side]: "22px" },
@@ -572,7 +732,7 @@
     if (!isOpen && cfg.tooltip_text) {
       const tooltipSide = side === "left" ? "bc-tooltip-left" : "bc-tooltip-right";
       const wrap = el("div", {
-        class: "bc-tooltip-wrap",
+        class: `bc-tooltip-wrap${(isOpen && isMobile()) ? " bc-launcher-hidden" : ""}`,
         style: { position: "fixed", bottom: "22px", [side]: "22px", zIndex: "2147483646" },
       },
         el("div", { class: `bc-tooltip ${tooltipSide}` }, cfg.tooltip_text),
@@ -631,6 +791,12 @@
     if (!root) {
       root = document.createElement("div");
       root.id = "bolchat-widget-root";
+      /* Ensure root is absolute at top-left so child absolute positioning is perfectly aligned with document */
+      root.style.position = "absolute";
+      root.style.top = "0";
+      root.style.left = "0";
+      root.style.width = "100%";
+      root.style.pointerEvents = "none"; /* Let clicks pass through root */
       document.body.appendChild(root);
       shadowRoot = root.attachShadow({ mode: "open" });
     }
@@ -645,7 +811,7 @@
     const panel = el("section", {
       class: `bc-panel ${isOpen ? "bc-visible" : "bc-hidden"}`,
       "aria-live": "polite",
-      style: { [side]: "22px" },
+      style: { [side]: "22px", pointerEvents: "auto" },
     });
     panel.appendChild(
       el("header", { class: "bc-header" },
@@ -700,14 +866,26 @@
     if (teaser) shadowRoot.appendChild(teaser);
 
     /* Launcher */
-    shadowRoot.appendChild(buildLauncher(side));
+    const launcherWrap = el("div", { style: { pointerEvents: "auto" } });
+    launcherWrap.appendChild(buildLauncher(side));
+    shadowRoot.appendChild(launcherWrap);
 
     requestAnimationFrame(() => {
       const mc = shadowRoot.getElementById("bc-messages");
       if (mc) mc.scrollTop = mc.scrollHeight;
       if (isOpen && !isLoading) {
         const inp = shadowRoot.getElementById("bc-input");
-        if (inp) inp.focus();
+        if (inp) {
+          /* On mobile, don't auto-focus to avoid keyboard popping up immediately */
+          if (!isMobile()) inp.focus();
+        }
+      }
+      /* Attach visualViewport listeners for keyboard handling */
+      if (isOpen && isMobile()) {
+        attachViewportListeners();
+        syncPanelToViewport();
+      } else if (!isMobile()) {
+        resetPanelSize();
       }
     });
   }
@@ -720,6 +898,14 @@
       if (messages.length === 0) {
         messages.push({ from: "bot", text: cfg.greeting || "Hi! How can I help you today?" });
         if (!sessionId) createSession();
+      }
+      /* Lock body scroll on mobile to prevent background scrolling */
+      if (isMobile()) lockBodyScroll();
+    } else {
+      /* Restore body scroll and reset panel sizing when chat closes */
+      if (isMobile()) {
+        unlockBodyScroll();
+        resetPanelSize();
       }
     }
     render();
@@ -753,6 +939,21 @@
 
   /* ── Boot ── */
   async function init() {
+    /* Ensure viewport-fit=cover for safe-area-inset on notched phones */
+    const existingVp = document.querySelector('meta[name="viewport"]');
+    if (existingVp) {
+      const content = existingVp.getAttribute("content") || "";
+      if (!content.includes("viewport-fit")) {
+        existingVp.setAttribute("content", content + ", viewport-fit=cover");
+      }
+    }
+
+    /* Handle orientation / resize changes while chat is open */
+    window.addEventListener("resize", () => {
+      if (isOpen && isMobile()) lockBodyScroll();
+      else if (isOpen && !isMobile()) unlockBodyScroll();
+    });
+
     await fetchConfig();
     hasEnteredView = false; /* reset so entrance animation plays */
     render();

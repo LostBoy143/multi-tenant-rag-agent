@@ -142,7 +142,7 @@ async def public_query(
             .limit(1)
         )
         past_lead = past_lead_result.scalar_one_or_none()
-        if past_lead and (past_lead.name or past_lead.email):
+        if past_lead and (past_lead.name or past_lead.email or past_lead.phone):
             visitor_profile = {
                 "name": past_lead.name,
                 "email": past_lead.email,
@@ -150,21 +150,29 @@ async def public_query(
                 "interest": past_lead.interest,
             }
 
-    # ── Fetch last bot message for contact-reply detection ──
+    # ── Fetch conversation history for multi-turn context ──
     last_bot_message: str | None = None
+    conversation_history: list[dict] = []
     if conversation_id:
-        last_bot_result = await db.execute(
-            select(Message.content)
-            .where(
-                Message.conversation_id == conversation_id,
-                Message.role == MessageRole.ASSISTANT,
-            )
-            .order_by(Message.created_at.desc())
-            .limit(1)
+        history_result = await db.execute(
+            select(Message)
+            .where(Message.conversation_id == conversation_id)
+            .order_by(Message.created_at.asc())
         )
-        row = last_bot_result.scalar_one_or_none()
-        if row:
-            last_bot_message = row
+        all_messages = history_result.scalars().all()
+        
+        # Prevent prompt length explosion by only sending the last 10 messages (5 turns)
+        recent_messages = all_messages[-10:] if len(all_messages) > 10 else all_messages
+        
+        for msg in recent_messages:
+            role = "assistant" if msg.role == MessageRole.ASSISTANT else "user"
+            conversation_history.append({"role": role, "content": msg.content})
+
+        # Also keep last_bot_message for contact-reply short-circuit detection
+        for msg in reversed(all_messages):
+            if msg.role == MessageRole.ASSISTANT:
+                last_bot_message = msg.content
+                break
 
     try:
         response, raw_answer = await answer_query(
@@ -176,6 +184,7 @@ async def public_query(
             visitor_profile=visitor_profile,
             last_bot_message=last_bot_message,
             conversation_id=conversation_id,
+            conversation_history=conversation_history,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

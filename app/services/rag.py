@@ -29,37 +29,49 @@ LEAD CAPTURE (PASSIVE MODE):
 - Do NOT proactively ask for contact information.
 - If the user voluntarily shares their name, email, phone, or company name, \
 acknowledge it naturally and continue helping.
+- IMPORTANT: If the user says "no", "I don't want to share", "skip", or any clear refusal, \
+immediately drop the topic and NEVER ask for their contact info again in this conversation.
 - When you have confirmed contact details from the user's own messages, append \
 EXACTLY ONE machine-parseable block at the very end of your reply (after your \
 visible answer, on its own line):
   <lead>{"name":"John Doe","email":"john@example.com","phone":"+1234567890","interest":"Support"}</lead>
 - Omit any keys you don't know (e.g., if you only know email, output <lead>{"email":"john@example.com"}</lead>). 
+- IMPORTANT: Always include ALL known contact details (name, email, phone) in the JSON block every time you emit it, even if you already emitted them in a previous turn.
 - Identify the user's primary intent in 1-2 words (e.g. "Pricing", "Demo", "Shipping") and include it as the "interest" key. NEVER fabricate contact info."""
 
 _LEAD_CAPTURE_SMART = """\
 
 LEAD CAPTURE (SMART MODE):
 - Be fully helpful first. Do not ask for contact info on an opening "hi".
-- After a visitor signals genuine interest (pricing, demo, product details, etc.), you may naturally offer to follow up. 
-- Keep your request to ONE extremely short conversational sentence. E.g.: "Happy to send you more details — what's the best email to reach you?"
+- After a visitor signals genuine interest, naturally offer to follow up using highly contextual hooks.
+  - Examples:
+    - Pricing: "I can send you exact pricing — where should I share it?"
+    - Demo: "Want me to set this up for you? I can reach out directly."
+    - Support: "Let me get someone to help — what's the best way to contact you?"
+- Keep your request to ONE extremely short conversational sentence.
 - DO NOT repeat requests for information you already have. If you already know their name, don't ask for it again.
-- If you have their name and email, you can ask for a phone number or just say you'll reach out.
 - ALWAYS answer the user's question FIRST before asking for contact info.
+- CRITICAL: If the user says "no", "I don't want to share", "skip", "already shared", or any refusal — immediately acknowledge it politely and NEVER ask for their contact info again in this conversation. Move on naturally.
 - When the user shares contact details, append EXACTLY ONE block at the end of your reply:
   <lead>{"name":"John Doe","email":"john@example.com","phone":"+1234567890","interest":"Demo"}</lead>
-- Omit any keys you don't know. Include an "interest" key summarizing their goal (e.g. "Pricing", "Support")."""
+- Omit any keys you don't know. 
+- IMPORTANT: Always include ALL known contact details (name, email, phone) in the JSON block every time you emit it, even if you already emitted them in a previous turn.
+- Include an "interest" key summarizing their goal (e.g. "Pricing", "Support")."""
 
 _LEAD_CAPTURE_AGGRESSIVE = """\
 
 LEAD CAPTURE (PROACTIVE MODE):
-- After your FIRST substantive answer (not a greeting), ask the user for their contact info in ONE very short sentence.
-- E.g.: "Before I dive deeper, what's your name and the best email to follow up?" 
-- DO NOT repeat requests for information you already have. If you know their name, just ask for email/phone.
+- After your FIRST substantive answer (not a greeting), ask the user for their contact info in ONE very short sentence using a contextual hook.
+- E.g.: "I'd love to share more details on that — where is the best place to reach you?" or "I can set up a quick demo to show you — what's the best email or phone number?"
+- DO NOT repeat requests for information you already have. If you know their name, just ask for email or phone.
 - ALWAYS answer the user's specific question FIRST before pivoting to lead capture.
 - If the user asks a question about lead capture (e.g. "do u need email too?"), answer it directly and warmly.
+- CRITICAL: If the user says "no", "I already shared", "I'm not sharing", or any clear refusal — immediately acknowledge and NEVER ask again. Do not loop. Move on to helping them.
 - When the user shares contact details, append EXACTLY ONE block at the end of your reply:
   <lead>{"name":"John Doe","email":"john@example.com","phone":"+1234567890","interest":"Pricing"}</lead>
-- Omit any keys you don't know. Include an "interest" key."""
+- Omit any keys you don't know. 
+- IMPORTANT: Always include ALL known contact details (name, email, phone) in the JSON block every time you emit it, even if you already emitted them in a previous turn.
+- Include an "interest" key."""
 
 _LEAD_MODE_PROMPTS: dict[str, str] = {
     "passive": _LEAD_CAPTURE_PASSIVE,
@@ -99,12 +111,19 @@ no bullet points (- or *), no numbered lists, no headers (#).
 - If you need to mention multiple things, weave them into a natural sentence \
 like "He works with React, Next.js, and Node.js" — NOT a bulleted list.
 
+MEMORY & CONTEXT PRIORITY:
+1. Current User Message (Highest Priority - ALWAYS address this first)
+2. Recent Conversation History (Last few turns for context)
+3. Known Visitor Data (Do NOT re-ask for contact info you already have)
+4. Past Interest (Lowest Priority - Use only if highly relevant)
+
 STRICT RULES:
 - NEVER reveal you are reading from a knowledge base or documents. No \
 "based on the provided documents", "according to the context", etc. Just \
 state things naturally as if you know them.
 - NEVER reference filenames, chunk numbers, or sources.
 - CONTEXT AWARENESS: If the user is simply providing their name, email, or phone number in response to your previous question, DO NOT treat it as a question to be answered. Just thank them, confirm you have their details, and politely tell them someone will reach out. Do NOT use the knowledge base to try and explain who they are.
+- You MAY provide the company's contact information if it is highly relevant to the user's intent (e.g., they want to book a demo, talk to sales, or need support). However, DO NOT spam or repeatedly append the contact info to every message. Once you've shared it, don't keep repeating it.
 - If the context doesn't have the answer, say something brief like "I'm not \
 sure about that — anything else I can help with?"
 - If the question is ambiguous, give a short best-guess answer and ask a \
@@ -113,6 +132,13 @@ brief follow-up.
 - Do NOT use filler phrases like "Great question!" or "Sure, I'd be happy \
 to help!"
 - Do NOT start with "So, ..." or "Well, ..." — just answer directly.
+- NEVER claim to have done something you haven't done. For example, if a user \
+says "note my name" or "take my number" but hasn't actually provided it yet, \
+ASK them for it instead of saying "done" or "noted".
+- NEVER fabricate or assume user details. If you don't know the user's name, \
+email, or phone number, admit it honestly. Do not guess or invent information.
+- If you shared the company's contact info once in this conversation, do NOT \
+repeat it in subsequent messages unless the user explicitly asks for it again.
 """
 
 NO_CONTEXT_INSTRUCTION = """\
@@ -124,10 +150,28 @@ Keep it casual and human. No markdown formatting.
 """
 
 GREETING_INSTRUCTION = """\
-You are a friendly chatbot on a company's website. The user just said hi or \
-something casual. Reply with a brief, warm 1-sentence greeting and offer to \
-help. Do NOT provide any information \
-about the company. Do NOT use markdown. Just be friendly and short.
+You are a friendly chatbot on a company's website. The user just said hi or something casual.
+
+Reply with ONE short, warm sentence that offers to help. Be natural and conversational — like a real person, not a customer service script.
+
+CRITICAL — NEVER use these overused robotic phrases (they are banned):
+- "It's nice to meet you"
+- "How can I assist you today"
+- "How may I help you today"
+- "Great to meet you"
+- "Nice to meet you"
+- "How can I help you today"
+- Any variation of "It's a pleasure to..."
+
+Instead, vary your tone. Some styles you can pick from (don't copy exactly, just use the spirit):
+- "Hey! What can I do for you?"
+- "Hi there! What brings you here today?"
+- "Hey, what's up? Ask me anything."
+- "Hello! What can I help you with?"
+- "Hi! Got a question? I'm here."
+- "Hey! What are you looking for today?"
+
+Pick a style that feels fresh and genuine. NEVER repeat the same opener twice if there's prior conversation history. No markdown. Keep it to ONE sentence.
 """
 
 _GREETING_PATTERNS = frozenset({
@@ -161,30 +205,45 @@ _CONTACT_ASK_SIGNALS = (
 _EMAIL_RE_SIMPLE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 _PHONE_RE_SIMPLE = re.compile(r"(?:\+?\d[\d\s\-().]{6,}\d)")
 
+# Words that look like short replies but are NOT contact info being provided
+_NON_CONTACT_SHORT_REPLIES = frozenset({
+    "no", "nope", "nah", "yes", "ya", "yep", "sure", "ok", "okay", "k",
+    "please", "connect", "thanks", "thank you", "ty", "thx",
+    "maybe", "idk", "i don't know", "not really", "already", "bro",
+    "ya sure", "yes sure", "okay sure", "please connect", "yes please",
+})
+
 
 def _is_contact_reply(user_text: str, last_bot_message: str | None) -> bool:
     """
-    Detect if the user is simply providing contact info (name, email, phone)
-    in response to the bot's previous question asking for it.
-    Returns True to signal: skip vector search, use acknowledgment prompt.
+    Detect if the user is actually providing contact info (email, phone, or a name)
+    in response to the bot asking for it. Tightened to avoid false positives on
+    short non-contact phrases like 'ya sure', 'no', 'please connect'.
     """
     if not last_bot_message:
         return False
 
-    # Check if the bot's last message was asking for contact info
+    # Bot must have been asking for contact info
     bot_lower = last_bot_message.lower()
-    bot_asked_for_contact = any(signal in bot_lower for signal in _CONTACT_ASK_SIGNALS)
-    if not bot_asked_for_contact:
+    if not any(signal in bot_lower for signal in _CONTACT_ASK_SIGNALS):
         return False
 
     user_clean = user_text.strip()
-    words = user_clean.split()
+    user_lower = user_clean.lower()
 
-    # If it's an email or phone, it's definitely contact info
+    # Hard matches: email or phone number present → definitely contact info
     if _EMAIL_RE_SIMPLE.search(user_clean) or _PHONE_RE_SIMPLE.search(user_clean):
         return True
 
-    # Short text (1-4 words), no question mark → likely a name
+    # Skip obvious non-contact short phrases
+    if user_lower in _NON_CONTACT_SHORT_REPLIES:
+        return False
+    # Multi-word phrases that start with negations or filler
+    if user_lower.startswith(("no ", "yes ", "ya ", "please ", "i ", "not ", "bro", "already")):
+        return False
+
+    words = user_clean.split()
+    # Short text (1-4 words), no question mark, not a refusal → likely a name
     if len(words) <= 4 and "?" not in user_clean:
         return True
 
@@ -197,7 +256,8 @@ contact information (like their name, email, or phone number) in response to you
 previous question. Acknowledge it warmly in ONE short sentence. If they only gave \
 partial info (e.g. just a name), ask for the remaining details (email or phone) \
 naturally. Do NOT use markdown. Do NOT look up anything about this person. \
-Just acknowledge and continue collecting their info.
+Just acknowledge and continue collecting their info. NEVER share the company's internal fallback phone or email. \
+NEVER claim you already have information that was not explicitly shared by the user in this conversation.
 """
 
 
@@ -218,49 +278,65 @@ def _build_context_message(chunks: list[str]) -> str:
 
 def _sync_generate(
     system: str,
-    user_message: str,
+    messages: list[dict],
     temperature: float = 0.4,
     max_output_tokens: int = 1024,
 ) -> str:
-    # 1. Attempt Groq First
+    """
+    Generate a response using Gemini (primary) or Groq (fallback).
+    Gemini is preferred for lower hallucination, better instruction following,
+    and stronger Hindi/Indic language support.
+    `messages` is the full multi-turn conversation list:
+      [{"role": "user"|"assistant", "content": "..."}]
+    The system prompt is prepended automatically.
+    """
+    # 1. Attempt Gemini First (lower hallucination, better structured output)
     try:
-        if not settings.groq_api_key:
-            raise ValueError("Groq API key not found in environment.")
-            
-        groq_client = groq.Client(api_key=settings.groq_api_key)
-        completion = groq_client.chat.completions.create(
-            model=settings.groq_model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_message}
-            ],
-            temperature=temperature,
-            max_completion_tokens=max_output_tokens,
-        )
-        logger.info("Response successfully generated by Groq.")
-        return completion.choices[0].message.content or "Sorry, I wasn't able to process that. Could you try again?"
-
-    # 2. Reroute to Gemini if Groq fails
-    except Exception as groq_e:
-        logger.warning(f"Groq API failed with error: {groq_e}. Falling back to Gemini.")
-        
-        try:
-            client = _get_llm_client()
-            response = client.models.generate_content(
-                model=settings.llm_model,
-                contents=user_message,
-                config=GenerateContentConfig(
-                    system_instruction=system,
-                    temperature=temperature,
-                    max_output_tokens=max_output_tokens,
-                ),
+        client = _get_llm_client()
+        from google.genai import types as genai_types
+        gemini_contents = []
+        for m in messages:
+            gemini_role = "model" if m["role"] == "assistant" else "user"
+            gemini_contents.append(
+                genai_types.Content(
+                    role=gemini_role,
+                    parts=[genai_types.Part(text=m["content"])],
+                )
             )
-            logger.info("Response successfully generated by Gemini (Fallback).")
-            return response.text or "Sorry, I wasn't able to process that. Could you try again?"
-            
-        except genai.errors.APIError as gemini_e:
-            logger.error(f"Gemini fallback also failed: {gemini_e}")
-            raise gemini_e
+        response = client.models.generate_content(
+            model=settings.llm_model,
+            contents=gemini_contents,
+            config=GenerateContentConfig(
+                system_instruction=system,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            ),
+        )
+        logger.info("Response successfully generated by Gemini.")
+        return response.text or "Sorry, I wasn't able to process that. Could you try again?"
+
+    # 2. Reroute to Groq if Gemini fails
+    except Exception as gemini_e:
+        logger.warning(f"Gemini API failed with error: {gemini_e}. Falling back to Groq.")
+
+        try:
+            if not settings.groq_api_key:
+                raise ValueError("Groq API key not configured for fallback.")
+
+            groq_client = groq.Client(api_key=settings.groq_api_key)
+            groq_messages = [{"role": "system", "content": system}] + messages
+            completion = groq_client.chat.completions.create(
+                model=settings.groq_model,
+                messages=groq_messages,
+                temperature=temperature,
+                max_completion_tokens=max_output_tokens,
+            )
+            logger.info("Response successfully generated by Groq (Fallback).")
+            return completion.choices[0].message.content or "Sorry, I wasn't able to process that. Could you try again?"
+
+        except Exception as groq_e:
+            logger.error(f"Groq fallback also failed: {groq_e}")
+            raise groq_e
 
 
 async def answer_query(
@@ -272,6 +348,7 @@ async def answer_query(
     visitor_profile: dict | None = None,
     last_bot_message: str | None = None,
     conversation_id: uuid.UUID | None = None,
+    conversation_history: list[dict] | None = None,
 ) -> tuple[QueryResponse, str]:
     """
     Returns (QueryResponse, raw_answer_text).
@@ -314,7 +391,15 @@ async def answer_query(
             "ur": "Urdu", "gu": "Gujarati", "kn": "Kannada", "ml": "Malayalam", "pa": "Punjabi"
         }
         lang_name = langs.get(lang_code, lang_code)
-        lang_instruction = f"\n\nCRITICAL LANGUAGE INSTRUCTION: You MUST identify the language the user is speaking and reply in that exact same language. However, if the user's text is gibberish, ambiguous, or unrecognizable, your absolute fallback language is {lang_name}. Do NOT fallback to English or any other language."
+        lang_instruction = f"""
+
+CRITICAL LANGUAGE INSTRUCTION:
+- Detect the user's language precisely.
+- Respond ONLY in that language.
+- Do NOT mix languages (e.g. no "Hinglish") under any circumstance.
+- Maintain natural fluency like a native speaker.
+- If the user's text is gibberish, ambiguous, or unrecognizable, your absolute fallback language is {lang_name}.
+"""
         system_instruction += lang_instruction
 
     # 5. Inject lead capture system prompt injection
@@ -345,36 +430,59 @@ async def answer_query(
 
     # 3. Inject long-term memory (returning visitor profile)
     if visitor_profile:
-        parts = []
-        if visitor_profile.get("name"):
-            parts.append(f"Their name is {visitor_profile['name']}.")
-        if visitor_profile.get("email"):
-            parts.append(f"Their email is {visitor_profile['email']}.")
-        if visitor_profile.get("interest"):
-            parts.append(f"Previously they were interested in: {visitor_profile['interest']}.")
-        if parts:
+        name_known = visitor_profile.get("name")
+        email_known = visitor_profile.get("email")
+        phone_known = visitor_profile.get("phone")
+        interest_known = visitor_profile.get("interest")
+
+        # Build a summary of what we already know about this visitor
+        on_file = []
+        if name_known: on_file.append(f"Name: {name_known}")
+        if email_known: on_file.append(f"Email: {email_known}")
+        if phone_known: on_file.append(f"Phone: {phone_known}")
+
+        if lead_capture_enabled and on_file:
+            # Returning visitor with lead data — use silently, never announce
             memory_note = (
-                "\n\nRETURNING VISITOR (LONG-TERM MEMORY): "
-                "This person has visited before. " + " ".join(parts)
-                + " Welcome them back by name if you know it, and ask how you can help today. "
-                "Do NOT re-ask for contact details you already have. "
-                "Do NOT mention that you have a 'memory' or 'database' — just be naturally welcoming."
+                f"\n\nRETURNING VISITOR DATA (use silently — NEVER announce): "
+                f"This visitor has interacted before. Details on file: {', '.join(on_file)}. "
+                "STRICT RULES FOR RETURNING VISITORS: "
+                "1. Do NOT re-ask for any of these details during lead capture. "
+                "2. Do NOT proactively mention, confirm, or announce these details. "
+                "Never say 'Welcome back [Name]' or 'I see you are [Name]' or "
+                "'I have your details on file' unprompted. "
+                "3. If the user provides updated contact info, accept it naturally. "
+                "4. Only reference stored details if the USER explicitly asks "
+                "(e.g. 'do you know my name?'). "
+                "5. NEVER mention a 'database', 'records', 'memory', or 'file'."
             )
-            system_instruction += memory_note
+        else:
+            # Visitor profile exists but no captured lead data yet.
+            # Inject as a silent hint — bot knows prior interest but won't announce it.
+            parts = []
+            if name_known: parts.append(f"Their name is {name_known}.")
+            if interest_known: parts.append(f"Previously they were interested in: {interest_known}.")
+            memory_note = (
+                "\n\nPREVIOUS VISITOR CONTEXT (use silently — NEVER announce): "
+                + (" ".join(parts) if parts else "")
+                + " STRICT RULES: "
+                "1. Do NOT greet them by name unprompted. "
+                "2. Do NOT mention you 'remember' them or their previous visits. "
+                "3. Only use this info if the user brings it up or to avoid re-asking for info they already gave. "
+                "4. NEVER mention a 'memory', 'database', or 'records'."
+            )
+        system_instruction += memory_note
 
     # 4. Short-circuit for greetings -- no vector search needed
+    # Memory is NOT surfaced here — bot greets neutrally.
+    # The visitor data will be used silently when the user actually does something.
     if _is_greeting(question):
         t0 = time.perf_counter()
-        # For returning visitors, use memory-enhanced greeting; otherwise plain greeting
         greeting_system = GREETING_INSTRUCTION.format(agent_name=agent.name) + lang_instruction
-        if visitor_profile and visitor_profile.get("name"):
-            greeting_system += (
-                f"\n\nIMPORTANT: This is a returning visitor named {visitor_profile['name']}. "
-                "Welcome them back by name warmly in ONE short sentence and ask how you can help today. "
-                "Do NOT mention databases, memory, or systems."
-            )
+        hist = list(conversation_history or [])
+        hist.append({"role": "user", "content": question})
         raw_answer = await to_thread.run_sync(
-            partial(_sync_generate, greeting_system, question, temperature, max_tokens)
+            partial(_sync_generate, greeting_system, hist, temperature, max_tokens)
         )
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
         clean_answer = _strip_lead_block(raw_answer)
@@ -386,8 +494,27 @@ async def answer_query(
         contact_system = CONTACT_ACK_INSTRUCTION.format(agent_name=agent.name) + lang_instruction
         if lead_capture_mode in _LEAD_MODE_PROMPTS:
             contact_system += _LEAD_MODE_PROMPTS[lead_capture_mode]
+        # Inject what's already been captured so the bot doesn't re-ask
+        if conversation_id:
+            async with async_session_factory() as db_cs:
+                lead_cs_res = await db_cs.execute(
+                    select(Lead).where(Lead.conversation_id == conversation_id)
+                )
+                current_lead_cs = lead_cs_res.scalar_one_or_none()
+                if current_lead_cs:
+                    captured_cs = []
+                    if current_lead_cs.name: captured_cs.append(f"Name: {current_lead_cs.name}")
+                    if current_lead_cs.email: captured_cs.append(f"Email: {current_lead_cs.email}")
+                    if current_lead_cs.phone: captured_cs.append(f"Phone: {current_lead_cs.phone}")
+                    if captured_cs:
+                        contact_system += (
+                            f"\n\nYOU ALREADY HAVE: {', '.join(captured_cs)}. "
+                            "Do NOT ask for these again. Only ask for what is still missing."
+                        )
+        hist_c = list(conversation_history or [])
+        hist_c.append({"role": "user", "content": question})
         raw_answer = await to_thread.run_sync(
-            partial(_sync_generate, contact_system, f"Bot's previous message: {last_bot_message}\n\nUser's reply: {question}", temperature, max_tokens)
+            partial(_sync_generate, contact_system, hist_c, temperature, max_tokens)
         )
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
         clean_answer = _strip_lead_block(raw_answer)
@@ -405,8 +532,10 @@ async def answer_query(
 
     if not results:
         t0 = time.perf_counter()
+        hist_nc = list(conversation_history or [])
+        hist_nc.append({"role": "user", "content": question})
         raw_answer = await to_thread.run_sync(
-            partial(_sync_generate, NO_CONTEXT_INSTRUCTION + lang_instruction, question, temperature, max_tokens)
+            partial(_sync_generate, NO_CONTEXT_INSTRUCTION + lang_instruction, hist_nc, temperature, max_tokens)
         )
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
         clean_answer = _strip_lead_block(raw_answer)
@@ -432,11 +561,16 @@ async def answer_query(
         )
 
     context_message = _build_context_message(context_texts)
-    user_message = f"{context_message}\n\nUSER QUESTION: {question}"
+    # Build the final user turn: inject KB context + current question
+    final_user_turn = f"{context_message}\n\nUSER QUESTION: {question}"
+
+    # Build multi-turn message list: all prior turns + the current enriched user turn
+    hist_main = list(conversation_history or [])
+    hist_main.append({"role": "user", "content": final_user_turn})
 
     t0 = time.perf_counter()
     raw_answer = await to_thread.run_sync(
-        partial(_sync_generate, system_instruction, user_message, temperature, max_tokens)
+        partial(_sync_generate, system_instruction, hist_main, temperature, max_tokens)
     )
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
