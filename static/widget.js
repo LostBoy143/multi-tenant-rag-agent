@@ -24,28 +24,31 @@
   let teaserTimer = null;
   let hasEnteredView = false;
   let savedBodyOverflow = "";
+  let bodyScrollLocked = false;
 
   /* ── Mobile detection ── */
   function isMobile() { return window.innerWidth <= 480; }
 
   function lockBodyScroll() {
+    if (bodyScrollLocked) return;
     savedBodyOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    bodyScrollLocked = true;
   }
   function unlockBodyScroll() {
+    if (!bodyScrollLocked) return;
     document.body.style.overflow = savedBodyOverflow || "";
+    bodyScrollLocked = false;
   }
 
   function syncPanelToViewport() {
     if (!isOpen || !isMobile() || !shadowRoot) return;
-    
+
     const panel = shadowRoot.querySelector(".bc-panel");
     if (panel) {
-      const top = window.visualViewport ? window.visualViewport.pageTop : window.scrollY;
+      /* position: fixed — just adjust height to match visible viewport (excludes keyboard) */
       const height = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-      panel.style.top = `${top}px`;
       panel.style.height = `${height}px`;
-      panel.style.bottom = "auto";
     }
 
     /* Adjust message bottom padding if suggestions exist so they don't overlap */
@@ -75,9 +78,7 @@
     if (!shadowRoot) return;
     const panel = shadowRoot.querySelector(".bc-panel");
     if (panel) {
-      panel.style.top = "";
       panel.style.height = "";
-      panel.style.bottom = "";
     }
   }
 
@@ -165,6 +166,7 @@
         --bc-surface: #ffffff;
         --bc-soft: #f6f7fb;
         all: initial;
+        pointer-events: none !important; /* Must come AFTER all:initial which resets to auto */
         color-scheme: light;
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
@@ -326,6 +328,7 @@
         border-bottom-right-radius: 4px;
         box-shadow: 0 12px 40px rgba(16,24,40,0.18), 0 0 0 1px rgba(15,23,42,0.06);
         cursor: pointer;
+        pointer-events: auto;
         animation: bc-teaser-in 500ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
         transition: opacity 300ms ease, transform 300ms ease;
       }
@@ -430,12 +433,14 @@
       .bc-bot .bc-bubble { color: var(--bc-text); background: #fff; border: 1px solid var(--bc-line); border-bottom-left-radius: 6px; }
       .bc-user .bc-bubble { color: #fff; background: var(--bc-brand); border-bottom-right-radius: 6px; }
 
-      .bc-typing { display: flex; align-items: center; gap: 5px; padding: 4px 0; }
-      .bc-typing span { width: 6px; height: 6px; border-radius: 999px; background: #94a3b8; animation: bc-bounce 1.1s infinite; }
-      .bc-typing span:nth-child(2) { animation-delay: 120ms; }
-      .bc-typing span:nth-child(3) { animation-delay: 240ms; }
+      .bc-typing { display: flex; align-items: center; gap: 8px; padding: 2px 4px; font-size: 13px; font-weight: 500; color: #64748b; }
+      .bc-typing-text { letter-spacing: 0.2px; }
+      .bc-typing-dots { display: flex; align-items: center; gap: 4px; margin-top: 2px; }
+      .bc-typing-dots span { width: 5px; height: 5px; border-radius: 999px; background: var(--bc-brand); animation: bc-bounce 1.2s infinite cubic-bezier(0.4, 0, 0.2, 1); }
+      .bc-typing-dots span:nth-child(2) { animation-delay: 150ms; }
+      .bc-typing-dots span:nth-child(3) { animation-delay: 300ms; }
       @keyframes bc-bounce {
-        0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
+        0%, 80%, 100% { transform: translateY(0); opacity: 0.3; }
         40% { transform: translateY(-4px); opacity: 1; }
       }
 
@@ -508,9 +513,11 @@
       /* ══════════════════ MOBILE — FULL SCREEN (WhatsApp Style) ══════════════════ */
       @media (max-width: 480px) {
         .bc-panel {
-          position: absolute !important; /* Absolute positioning tracks the document perfectly */
+          position: fixed !important;
+          top: 0 !important;
           left: 0 !important;
           right: 0 !important;
+          bottom: 0 !important;
           width: 100vw !important;
           max-width: none !important;
           max-height: none !important;
@@ -519,16 +526,16 @@
           box-shadow: none !important;
           padding-top: env(safe-area-inset-top, 0px);
           display: block !important; 
-          /* Remove transition on height/top so it tracks the keyboard instantly without lag */
           transition: opacity 180ms ease, transform 180ms ease;
         }
         .bc-panel.bc-hidden {
           opacity: 0;
-          pointer-events: none;
+          pointer-events: none !important;
           transform: translateY(100%);
         }
         .bc-panel.bc-visible {
           opacity: 1;
+          pointer-events: auto;
           transform: translateY(0);
         }
 
@@ -654,10 +661,26 @@
   async function sendQuery(question) {
     const h = reqHeaders();
     if (sessionId) h["X-Conversation-ID"] = sessionId;
-    const res = await fetch(`${API_URL}/api/v1/public/chat/query`, {
-      method: "POST", headers: h,
-      body: JSON.stringify({ agent_id: AGENT_ID, question }),
-    });
+    
+    /* Enforce a 45-second frontend timeout to allow 15s primary + 15s fallback + network overhead */
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+    let res;
+    try {
+      res = await fetch(`${API_URL}/api/v1/public/chat/query`, {
+        method: "POST", headers: h,
+        body: JSON.stringify({ agent_id: AGENT_ID, question }),
+        signal: controller.signal
+      });
+    } catch (e) {
+      if (e.name === 'AbortError') {
+        throw new Error("The request took too long. Please try again.");
+      }
+      throw e;
+    } finally {
+      clearTimeout(timeoutId);
+    }
     if (!res.ok) {
       let msg = "Sorry, something went wrong. Please try again.";
       try {
@@ -687,7 +710,10 @@
         el("div", { class: "bc-row bc-bot" },
           el("div", { class: "bc-avatar" }, html(icon("bot"))),
           el("div", { class: "bc-bubble" },
-            el("div", { class: "bc-typing" }, el("span"), el("span"), el("span"))
+            el("div", { class: "bc-typing" }, 
+              el("span", { class: "bc-typing-text" }, "Thinking"),
+              el("div", { class: "bc-typing-dots" }, el("span"), el("span"), el("span"))
+            )
           )
         )
       );
@@ -791,12 +817,8 @@
     if (!root) {
       root = document.createElement("div");
       root.id = "bolchat-widget-root";
-      /* Ensure root is absolute at top-left so child absolute positioning is perfectly aligned with document */
-      root.style.position = "absolute";
-      root.style.top = "0";
-      root.style.left = "0";
-      root.style.width = "100%";
-      root.style.pointerEvents = "none"; /* Let clicks pass through root */
+      /* Zero-size fixed container — cannot cover or block any part of the host page */
+      root.style.cssText = "position:fixed;top:0;left:0;width:0;height:0;overflow:visible;pointer-events:none;z-index:2147483647;";
       document.body.appendChild(root);
       shadowRoot = root.attachShadow({ mode: "open" });
     }
@@ -807,11 +829,10 @@
 
     const side = isLeft() ? "left" : "right";
 
-    /* Chat panel */
     const panel = el("section", {
       class: `bc-panel ${isOpen ? "bc-visible" : "bc-hidden"}`,
       "aria-live": "polite",
-      style: { [side]: "22px", pointerEvents: "auto" },
+      style: { [side]: "22px", pointerEvents: isOpen ? "auto" : "none" },
     });
     panel.appendChild(
       el("header", { class: "bc-header" },

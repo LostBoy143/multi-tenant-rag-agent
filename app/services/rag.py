@@ -7,7 +7,6 @@ from functools import partial
 from anyio import to_thread
 import groq
 from google import genai
-from google.genai.types import GenerateContentConfig
 from qdrant_client import AsyncQdrantClient
 from sqlalchemy import select
 
@@ -20,6 +19,10 @@ from app.services.embedding import embed_query
 from app.services.vector_store import search_chunks
 
 logger = logging.getLogger(__name__)
+
+
+class LLMProviderError(RuntimeError):
+    """Raised when every configured LLM provider fails for one generation."""
 
 # ── Lead-capture prompt fragments (§4.2) ─────────────────────────────────────
 
@@ -42,16 +45,12 @@ visible answer, on its own line):
 _LEAD_CAPTURE_SMART = """\
 
 LEAD CAPTURE (SMART MODE):
-- Be fully helpful first. Do not ask for contact info on an opening "hi".
-- After a visitor signals genuine interest, naturally offer to follow up using highly contextual hooks.
-  - Examples:
-    - Pricing: "I can send you exact pricing — where should I share it?"
-    - Demo: "Want me to set this up for you? I can reach out directly."
-    - Support: "Let me get someone to help — what's the best way to contact you?"
+- Be fully helpful first. Do NOT ask for contact info on a casual greeting (like "hi" or "just hanging around").
+- ONLY offer to follow up or ask for contact info if the user explicitly asks about pricing, buying, or a demo. Do NOT ask on every message.
 - Keep your request to ONE extremely short conversational sentence.
 - DO NOT repeat requests for information you already have. If you already know their name, don't ask for it again.
 - ALWAYS answer the user's question FIRST before asking for contact info.
-- CRITICAL: If the user says "no", "I don't want to share", "skip", "already shared", or any refusal — immediately acknowledge it politely and NEVER ask for their contact info again in this conversation. Move on naturally.
+- CRITICAL: If the user says "no", "I don't want a demo", "nah", "skip", "already shared", or any refusal — IMMEDIATELY drop it. NEVER ask for a demo or contact info again in ANY subsequent message. Just say "No problem" and move on naturally.
 - When the user shares contact details, append EXACTLY ONE block at the end of your reply:
   <lead>{"name":"John Doe","email":"john@example.com","phone":"+1234567890","interest":"Demo"}</lead>
 - Omit any keys you don't know. 
@@ -61,12 +60,12 @@ LEAD CAPTURE (SMART MODE):
 _LEAD_CAPTURE_AGGRESSIVE = """\
 
 LEAD CAPTURE (PROACTIVE MODE):
-- After your FIRST substantive answer (not a greeting), ask the user for their contact info in ONE very short sentence using a contextual hook.
-- E.g.: "I'd love to share more details on that — where is the best place to reach you?" or "I can set up a quick demo to show you — what's the best email or phone number?"
+- After your FIRST substantive answer (not a greeting or casual chat like "hanging around"), ask the user for their contact info in ONE very short sentence using a contextual hook.
+- E.g.: "I'd love to share more details on that — where is the best place to reach you?"
 - DO NOT repeat requests for information you already have. If you know their name, just ask for email or phone.
 - ALWAYS answer the user's specific question FIRST before pivoting to lead capture.
 - If the user asks a question about lead capture (e.g. "do u need email too?"), answer it directly and warmly.
-- CRITICAL: If the user says "no", "I already shared", "I'm not sharing", or any clear refusal — immediately acknowledge and NEVER ask again. Do not loop. Move on to helping them.
+- CRITICAL: If the user says "no", "nah", "I already shared", "I'm not sharing", or any clear refusal — immediately acknowledge and NEVER ask for contact info or a demo again in this conversation. Do not loop. Move on to helping them.
 - When the user shares contact details, append EXACTLY ONE block at the end of your reply:
   <lead>{"name":"John Doe","email":"john@example.com","phone":"+1234567890","interest":"Pricing"}</lead>
 - Omit any keys you don't know. 
@@ -118,12 +117,11 @@ MEMORY & CONTEXT PRIORITY:
 4. Past Interest (Lowest Priority - Use only if highly relevant)
 
 STRICT RULES:
-- NEVER reveal you are reading from a knowledge base or documents. No \
-"based on the provided documents", "according to the context", etc. Just \
-state things naturally as if you know them.
-- NEVER reference filenames, chunk numbers, or sources.
+- NEVER reveal you are an AI reading from a knowledge base or documents. Do NOT use phrases like "based on the provided documents", "according to the context", "in the knowledge base", etc. Just state things naturally.
+- NEVER mention the words "knowledge base", "documents", or "context".
+- If the user corrects you or provides new information (e.g., "I heard X is the founder"), just politely agree or confirm. Do NOT apologize profusely, and NEVER say "I should have known that" or reference your instructions or knowledge base.
 - CONTEXT AWARENESS: If the user is simply providing their name, email, or phone number in response to your previous question, DO NOT treat it as a question to be answered. Just thank them, confirm you have their details, and politely tell them someone will reach out. Do NOT use the knowledge base to try and explain who they are.
-- You MAY provide the company's contact information if it is highly relevant to the user's intent (e.g., they want to book a demo, talk to sales, or need support). However, DO NOT spam or repeatedly append the contact info to every message. Once you've shared it, don't keep repeating it.
+- You MAY provide the company's contact information if it is highly relevant to the user's intent. However, DO NOT spam or repeatedly append the contact info to every message. Once you've shared it, don't keep repeating it.
 - If the context doesn't have the answer, say something brief like "I'm not \
 sure about that — anything else I can help with?"
 - If the question is ambiguous, give a short best-guess answer and ask a \
@@ -139,14 +137,27 @@ ASK them for it instead of saying "done" or "noted".
 email, or phone number, admit it honestly. Do not guess or invent information.
 - If you shared the company's contact info once in this conversation, do NOT \
 repeat it in subsequent messages unless the user explicitly asks for it again.
+- NEVER invent or guess a company email address, phone number, or redirect the user to a fake department.
+- If you do not know the answer, do NOT try to smoothly pivot into a sales pitch. Just admit you don't know.
 """
 
 NO_CONTEXT_INSTRUCTION = """\
-You are a friendly chatbot on a company's website. The user asked something \
-you don't have information about. Respond in 1 sentence to let them know \
-you aren't sure, and offer further help. \
-Do NOT say "no documents found" or anything about a knowledge base. \
-Keep it casual and human. No markdown formatting.
+You are a friendly chatbot on a company's website. The user just asked a question that has nothing to do with this company, or a question you do not have the answer to.
+
+CRITICAL RULES:
+- You MUST respond in exactly ONE short sentence.
+- You MUST politely state you do not know.
+- NEVER invent or guess an email address, phone number, or company name.
+- NEVER try to pivot, change the subject, or pitch a product.
+- NEVER say "great question" or use any filler phrases.
+- Do NOT say "no documents found" or mention a knowledge base.
+- NEVER use markdown.
+
+Examples of good responses:
+- "I'm sorry, I don't have any information on that."
+- "I'm just a company assistant, so I can't help with that one!"
+- "I don't know the answer to that, sorry!"
+- "I'm afraid I don't have details on that topic."
 """
 
 GREETING_INSTRUCTION = """\
@@ -267,13 +278,58 @@ _llm_client: genai.Client | None = None
 def _get_llm_client() -> genai.Client:
     global _llm_client
     if _llm_client is None:
-        _llm_client = genai.Client(api_key=settings.gemini_api_key)
+        _llm_client = genai.Client(
+            api_key=settings.gemini_api_key, 
+            http_options={"timeout": 45.0}
+        )
     return _llm_client
 
 
 def _build_context_message(chunks: list[str]) -> str:
     numbered = [f"[{i + 1}] {text}" for i, text in enumerate(chunks)]
     return "KNOWLEDGE BASE:\n\n" + "\n\n".join(numbered)
+
+
+def _generate_with_gemini(system: str, messages: list[dict], temperature: float, max_output_tokens: int) -> str:
+    client = _get_llm_client()
+    from google.genai import types as genai_types
+    gemini_contents = []
+    for m in messages:
+        gemini_role = "model" if m["role"] == "assistant" else "user"
+        gemini_contents.append(
+            genai_types.Content(
+                role=gemini_role,
+                parts=[genai_types.Part(text=m["content"])],
+            )
+        )
+    response = client.models.generate_content(
+        model=settings.llm_model,
+        contents=gemini_contents,
+        config=genai_types.GenerateContentConfig(
+            system_instruction=system,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+        ),
+    )
+    logger.info("Response successfully generated by Gemini.")
+    return response.text or "Sorry, I wasn't able to process that. Could you try again?"
+
+
+def _generate_with_groq(system: str, messages: list[dict], temperature: float, max_output_tokens: int) -> str:
+    if not settings.groq_api_key:
+        raise ValueError("Groq API key not configured for fallback.")
+
+    groq_client = groq.Client(api_key=settings.groq_api_key)
+    groq_messages = [{"role": "system", "content": system}] + messages
+    completion = groq_client.chat.completions.create(
+        model=settings.groq_model,
+        messages=groq_messages,
+        temperature=temperature,
+        max_tokens=max_output_tokens,
+        timeout=15.0,
+    )
+    logger.info("Response successfully generated by Groq.")
+    return completion.choices[0].message.content or "Sorry, I wasn't able to process that. Could you try again?"
 
 
 def _sync_generate(
@@ -283,60 +339,28 @@ def _sync_generate(
     max_output_tokens: int = 1024,
 ) -> str:
     """
-    Generate a response using Gemini (primary) or Groq (fallback).
-    Gemini is preferred for lower hallucination, better instruction following,
-    and stronger Hindi/Indic language support.
+    Generate a response using the primary LLM, falling back to the secondary.
     `messages` is the full multi-turn conversation list:
       [{"role": "user"|"assistant", "content": "..."}]
     The system prompt is prepended automatically.
     """
-    # 1. Attempt Gemini First (lower hallucination, better structured output)
-    try:
-        client = _get_llm_client()
-        from google.genai import types as genai_types
-        gemini_contents = []
-        for m in messages:
-            gemini_role = "model" if m["role"] == "assistant" else "user"
-            gemini_contents.append(
-                genai_types.Content(
-                    role=gemini_role,
-                    parts=[genai_types.Part(text=m["content"])],
-                )
-            )
-        response = client.models.generate_content(
-            model=settings.llm_model,
-            contents=gemini_contents,
-            config=GenerateContentConfig(
-                system_instruction=system,
-                temperature=temperature,
-                max_output_tokens=max_output_tokens,
-            ),
-        )
-        logger.info("Response successfully generated by Gemini.")
-        return response.text or "Sorry, I wasn't able to process that. Could you try again?"
-
-    # 2. Reroute to Groq if Gemini fails
-    except Exception as gemini_e:
-        logger.warning(f"Gemini API failed with error: {gemini_e}. Falling back to Groq.")
-
+    providers = ["groq", "gemini"] if settings.primary_llm_provider.lower() == "groq" else ["gemini", "groq"]
+    
+    last_exception = None
+    for provider in providers:
         try:
-            if not settings.groq_api_key:
-                raise ValueError("Groq API key not configured for fallback.")
-
-            groq_client = groq.Client(api_key=settings.groq_api_key)
-            groq_messages = [{"role": "system", "content": system}] + messages
-            completion = groq_client.chat.completions.create(
-                model=settings.groq_model,
-                messages=groq_messages,
-                temperature=temperature,
-                max_completion_tokens=max_output_tokens,
-            )
-            logger.info("Response successfully generated by Groq (Fallback).")
-            return completion.choices[0].message.content or "Sorry, I wasn't able to process that. Could you try again?"
-
-        except Exception as groq_e:
-            logger.error(f"Groq fallback also failed: {groq_e}")
-            raise groq_e
+            if provider == "groq":
+                return _generate_with_groq(system, messages, temperature, max_output_tokens)
+            else:
+                return _generate_with_gemini(system, messages, temperature, max_output_tokens)
+        except Exception as e:
+            logger.warning(f"{provider.capitalize()} API failed with error: {e}. Falling back...")
+            last_exception = e
+            
+    logger.error(f"All LLM providers failed. Last exception: {last_exception}")
+    if last_exception:
+        raise LLMProviderError("All LLM providers failed.") from last_exception
+    raise LLMProviderError("All LLM providers failed.")
 
 
 async def answer_query(

@@ -172,7 +172,7 @@ async def preview_agent_chat(
     without needing an API key.
     """
     from app.dependencies import get_qdrant
-    from app.services.rag import answer_query
+    from app.services.rag import LLMProviderError, answer_query
 
     # Verify agent belongs to user's organization
     result = await db.execute(
@@ -194,6 +194,11 @@ async def preview_agent_chat(
         return {"success": True, "data": {"answer": response.answer, "sources": [s.model_dump() for s in response.sources]}}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except LLMProviderError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The AI provider is temporarily unavailable. Please try again shortly.",
+        ) from e
 
 
 # ──────────────────────────────────────────────

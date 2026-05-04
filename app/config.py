@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     gemini_api_key: str
     groq_api_key: str | None = None
     groq_model: str = "llama-3.3-70b-versatile"
+    primary_llm_provider: str = "gemini" # "groq" or "gemini" to  change primary model
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_dimensions: int = 384
     llm_model: str = "gemini-2.0-flash"

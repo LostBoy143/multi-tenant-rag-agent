@@ -1,3 +1,4 @@
+import logging
 import uuid
 from typing import Annotated
 
@@ -11,11 +12,12 @@ from app.models.agent import Agent, AgentStatus
 from app.models.widget import Widget
 from app.models.conversation import Conversation, Message, MessageRole
 from app.schemas.chat import QueryRequest, QueryResponse
-from app.services.rag import answer_query
+from app.services.rag import LLMProviderError, answer_query
 from app.services.lead_extractor import process_lead_from_message
 from app.models.lead import Lead
 
 router = APIRouter(prefix="/api/v1/public", tags=["public"])
+logger = logging.getLogger(__name__)
 
 
 async def _get_published_agent(
@@ -188,6 +190,12 @@ async def public_query(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except LLMProviderError as e:
+        logger.warning("All LLM providers failed for public chat query.", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"I'm really sorry, but I am currently assisting a high volume of visitors.{contact_msg}",
+        ) from e
     except genai.errors.APIError as e:
         if e.code == 503:
             raise HTTPException(
